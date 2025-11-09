@@ -1,0 +1,18 @@
+# Work include rules - backup only work-related files
+# This will backup ONLY these items (everything else ignored)
+
+Work/
+Projects/
+dev/
+workspace/
+code/
+
+# Configuration files
+.gitconfig
+.bashrc
+.zshrc
+.vimrc
+
+# SSH and GPG keys
+.ssh/
+.gnupg/

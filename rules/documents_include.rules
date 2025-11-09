@@ -1,0 +1,16 @@
+# Documents include rules - backup only important documents
+# This will backup ONLY these items (everything else ignored)
+
+Documents/
+.ssh/
+.gnupg/
+.config/
+Desktop/
+Downloads/important/
+
+# Specific file patterns
+*.pdf
+*.doc
+*.docx
+*.odt
+*.txt

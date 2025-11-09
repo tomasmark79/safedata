@@ -1,0 +1,17 @@
+# INCLUDE rules - only these items will be backed up
+# Everything else will be ignored
+# Paths are relative to the source directory
+
+# Example for /home/tomas backup:
+# tomas/.cert
+
+# Example for /boot backup:
+# grub
+# vmlinuz*
+# initramfs*
+
+# Notes:
+# - No leading slashes
+# - No trailing slashes
+# - Use wildcards: *, ?, []
+# - Lines starting with # are ignored

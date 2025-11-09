@@ -1,0 +1,40 @@
+# EXCLUDE rules - these items will NOT be backed up
+# Everything else WILL be backed up
+# Paths are relative to the source directory
+
+# Common excludes:
+lost+found
+.Trash-1000
+.android
+.gradle
+.cache
+.thumbnails
+.local/share/Trash
+.local/share/Steam
+.local/share/flatpak
+.pyenv
+llvm
+Cache
+CachedData
+CachedExtension
+CacheStorage
+GrShaderCache
+ShaderCache
+component_crx_cache
+libvirt/qemu/save/*.save
+restore
+
+# Temporary files:
+*.tmp
+*.temp
+~*
+
+# System/cache directories:
+.mozilla/firefox/*/cache2
+.config/google-chrome/*/Cache
+
+# Notes:
+# - No leading slashes
+# - No trailing slashes
+# - Use wildcards: *, ?, []
+# - Lines starting with # are ignored

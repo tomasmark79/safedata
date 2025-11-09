@@ -1,0 +1,24 @@
+# EXCLUDE rules - these items will NOT be backed up
+# Everything else WILL be backed up
+# Paths are relative to the source directory
+
+lost+found
+.Trash-1000
+.conan2
+libvirt/images
+libvirt/iso
+build/installation
+build/standalone
+build/library
+dotnamebackup
+
+# Temporary files:
+*.tmp
+*.temp
+~*
+
+# Notes:
+# - No leading slashes
+# - No trailing slashes
+# - Use wildcards: *, ?, []
+# - Lines starting with # are ignored

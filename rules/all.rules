@@ -1,0 +1,9 @@
+# ALL rules - backup EVERYTHING
+# No filters applied, complete backup of the entire volume/directory
+# This file can be empty or contain this comment
+
+# This mode is equivalent to a full backup without any include/exclude rules
+# Useful for:
+# - Complete system backups
+# - First-time backups
+# - Archive/snapshot purposes

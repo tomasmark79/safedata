@@ -1,0 +1,16 @@
+# EXCLUDE rules - these items will NOT be backed up
+# Everything else WILL be backed up
+# Paths are relative to the source directory
+
+cache
+tmp
+temp
+flatpak
+qemu/save/*.save
+
+# Notes:
+# - No leading slashes
+# - No trailing slashes
+# - Use wildcards: *, ?, []
+# - Lines starting with # are ignored
+

@@ -1,0 +1,26 @@
+# System cache exclude rules - exclude all cache and temporary files
+# This will backup everything EXCEPT these cache/temp items
+
+.cache/
+.tmp/
+tmp/
+temp/
+
+# Browser caches
+.mozilla/*/cache*/
+.config/google-chrome/*/Cache/
+.config/chromium/*/Cache/
+
+# Application caches
+.npm/
+.yarn/cache/
+.gradle/caches/
+__pycache__/
+node_modules/
+
+# Thumbnails
+.thumbnails/
+thumbs.db
+
+# Trash
+.local/share/Trash/
