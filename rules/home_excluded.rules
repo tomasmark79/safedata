@@ -8,9 +8,9 @@ lost+found
 .android
 .gradle
 .cache
+.local/share/Steam
 .thumbnails
 .local/share/Trash
-.local/share/Steam
 .local/share/flatpak
 .pyenv
 llvm
