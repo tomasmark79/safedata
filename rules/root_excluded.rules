@@ -3,7 +3,9 @@
 # Paths are relative to the source directory
 
 lost+found
-usr/share/ollama/.ollama/models
+opt/teamviewer
+usr/share/ollama
+lib/ollama
 
 # Temporary files:
 *.tmp
