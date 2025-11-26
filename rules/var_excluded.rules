@@ -7,6 +7,7 @@ tmp
 temp
 flatpak
 qemu/save/*.save
+lib/ollama
 
 # Notes:
 # - No leading slashes
