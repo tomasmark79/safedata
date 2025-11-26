@@ -1,0 +1,17 @@
+# EXCLUDE rules - these items will NOT be backed up
+# Everything else WILL be backed up
+# Paths are relative to the source directory
+
+lost+found
+usr/share/ollama/.ollama/models
+
+# Temporary files:
+*.tmp
+*.temp
+~*
+
+# Notes:
+# - No leading slashes
+# - No trailing slashes
+# - Use wildcards: *, ?, []
+# - Lines starting with # are ignored
