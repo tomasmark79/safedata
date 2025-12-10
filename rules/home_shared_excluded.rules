@@ -3,6 +3,7 @@
 # Paths are relative to the source directory
 
 lost+found
+tmp
 .Trash-1000
 .conan2
 libvirt/images

@@ -4,6 +4,7 @@
 
 # Common excludes:
 lost+found
+tmp
 .Trash-1000
 .android
 .gradle
