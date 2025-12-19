@@ -118,7 +118,43 @@ log() {
   echo "$(date +"%Y-%m-%d %H:%M:%S") : ${MESSAGE}" | tee -a "${LOG_FILE}" | logger -t safedata
 }
 
+# Function to send GNOME notification
+send_notification() {
+  local TITLE="$1"
+  local MESSAGE="$2"
+  local URGENCY="${3:-normal}"  # low, normal, critical
+  local ICON="${4:-folder-download}"
+  local EXPIRE="${5:-5000}"  # expire time in milliseconds (default 5s)
+  
+  # Find the actual user (not root) - check who invoked sudo or use $SUDO_USER
+  local REAL_USER="${SUDO_USER:-$(logname 2>/dev/null || echo $USER)}"
+  
+  # Get the user's DBUS session
+  local DBUS_ADDRESS=$(ps -u "$REAL_USER" e | grep -o 'DBUS_SESSION_BUS_ADDRESS=[^ ]*' | head -n1 | cut -d= -f2-)
+  
+  if [ -n "$DBUS_ADDRESS" ] && [ -n "$REAL_USER" ]; then
+    # Use fixed replace-id so new notifications replace old ones
+    sudo -u "$REAL_USER" DBUS_SESSION_BUS_ADDRESS="$DBUS_ADDRESS" \
+      notify-send -u "$URGENCY" -i "$ICON" -t "$EXPIRE" \
+      -h string:x-canonical-private-synchronous:safedata \
+      "$TITLE" "$MESSAGE" 2>/dev/null || true
+  fi
+}
+
+# Function to log error and send notification
+log_error() {
+  local MESSAGE="$1"
+  log "$MESSAGE"
+  send_notification "SafeData ✗" "$MESSAGE" "critical" "dialog-error" "30000"
+}
+
 cleanup() {
+  # Stop progress indicator on cleanup (including error scenarios)
+  if [ -n "${ZENITY_PID}" ]; then
+    pkill -P "${ZENITY_PID}" 2>/dev/null || true
+    kill "${ZENITY_PID}" 2>/dev/null || true
+  fi
+  
   # Only cleanup if variables are set (to avoid issues when called by trap at script end)
   if [ -n "${MNT_DIR}" ] && mountpoint -q "${MNT_DIR}" 2>/dev/null; then
     log "Unmounting snapshot ${SNAP_NAME}"
@@ -251,6 +287,38 @@ log "==================== Starting SafeData Backup ===================="
 # Start time measurement
 START_TIME=$(date +%s)
 
+# Start progress indicator window
+VOLUMES_LIST=$(printf "%s " "${VOLUMES[@]}")
+ZENITY_PID=""
+if [ -n "${SUDO_USER:-}" ]; then
+  # Get user's DBUS session and DISPLAY
+  DBUS_ADDRESS=$(ps -u "${SUDO_USER}" e 2>/dev/null | grep -o 'DBUS_SESSION_BUS_ADDRESS=[^ ]*' | head -n1 | cut -d= -f2- || echo "")
+  USER_DISPLAY=$(ps -u "${SUDO_USER}" e 2>/dev/null | grep -o 'DISPLAY=[^ ]*' | head -n1 | cut -d= -f2- || echo "")
+  
+  if [ -n "$DBUS_ADDRESS" ] && [ -n "$USER_DISPLAY" ]; then
+    # Start zenity progress dialog
+    (
+      while true; do
+        echo "#Backup in progress: ${VOLUMES_LIST}"
+        sleep 1
+      done
+    ) | sudo -u "${SUDO_USER}" \
+      DBUS_SESSION_BUS_ADDRESS="$DBUS_ADDRESS" \
+      DISPLAY="$USER_DISPLAY" \
+      zenity --progress \
+        --title="SafeData - Backup" \
+        --text="Backup in progress: ${VOLUMES_LIST}" \
+        --pulsate \
+        --no-cancel \
+        --auto-close \
+        --width=350 \
+        --height=100 \
+        2>/dev/null &
+    ZENITY_PID=$!
+    log "Started progress indicator with PID: ${ZENITY_PID}"
+  fi
+fi
+
 # Main backup loop
 for VOL in "${VOLUMES[@]}"; do
   TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
@@ -310,7 +378,7 @@ for VOL in "${VOLUMES[@]}"; do
   # ============================================
   log "Creating snapshot for ${VOL}"
   if ! lvcreate -L "${LVM_SNAP_SIZE}" -s -n "${SNAP_NAME}" "${ORIG_DEV}"; then
-    log "ERROR: Failed to create snapshot for ${VOL}"
+    log_error "Chyba: Nelze vytvořit snapshot ${VOL}"
     exit 1
   fi
 
@@ -335,7 +403,7 @@ for VOL in "${VOLUMES[@]}"; do
     if tar cvpz -C "${MNT_DIR}" ${TAR_ARGS} | ssh -i ~/.ssh/id_rsa_backupagent -p ${SSH_PORT} ${REMOTE_SSH_USER}@${REMOTE_SSH_HOST} "cat > ${REMOTE_BASE_DIR}/${VOL}_${TIMESTAMP}.tar.gz"; then
       log "Tar backup completed successfully for ${VOL}"
     else
-      log "ERROR: Tar backup failed for ${VOL}"
+      log_error "Chyba: Tar zálohování selhalo pro ${VOL}"
       cleanup
       exit 1
     fi
@@ -349,7 +417,7 @@ for VOL in "${VOLUMES[@]}"; do
     if rsync -azl ${RSYNC_ARGS} -e "ssh -p ${SSH_PORT}" -v "${MNT_DIR}/" "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}:${REMOTE_BASE_DIR}/${VOL}/"; then
       log "Rsync_notimestamp backup completed successfully for ${VOL}"
     else
-      log "ERROR: Rsync_notimestamp backup failed for ${VOL}"
+      log_error "Chyba: Rsync zálohování selhalo pro ${VOL}"
       cleanup
       exit 1
     fi
@@ -393,3 +461,10 @@ fi
 
 log "All backups completed successfully (elapsed time: ${TIME_MSG})"
 echo "All backups completed successfully (elapsed time: ${TIME_MSG})"
+
+# Stop progress indicator
+if [ -n "${ZENITY_PID}" ]; then
+  pkill -P "${ZENITY_PID}" 2>/dev/null || true
+  kill "${ZENITY_PID}" 2>/dev/null || true
+  log "Stopped progress indicator (PID: ${ZENITY_PID})"
+fi
