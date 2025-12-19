@@ -155,13 +155,69 @@ sudo ./safedata.sh included.rules folder_rsync /mnt/data/photos
 
 Logs are saved to:
 ```bash
-/var/log/safedata.log
+~/.local/share/safedata/logs/
 ```
 
 And to systemd journal:
 ```bash
 journalctl -t safedata
 ```
+
+## 📊 Statistics and Monitoring
+
+Safedata includes a tool for extracting and visualizing backup statistics from logs.
+
+### Quick Start
+
+View statistics and graphs:
+```bash
+./show_stats.sh
+```
+
+This will:
+1. Automatically extract statistics from all logs (if needed)
+2. Show an interactive menu with graphs and statistics
+
+### Menu Options
+
+1. **Sent bytes over time** - Graph of transferred data per backup
+2. **Transfer speed over time** - Network/disk transfer speed trends  
+3. **Elapsed time over time** - Backup duration trends
+4. **Total backup size over time** - Total size of backed up data
+5. **All graphs** - Display all graphs at once
+6. **Summary statistics** - Min/Max/Average values
+
+### Example Output
+
+```
+=== Transfer Speed (bytes/sec) ===
+   1008176 │⠈⠀⠀
+    704367 │⠀⠀⠀
+    400559 │⠀⠀⠀
+    172703 │⠀⠀⡀
+           └───
+```
+
+### Statistics Tracked
+
+- Sent/received bytes
+- Transfer speed (bytes/sec)
+- Backup duration (seconds)
+- Total backup size
+- Speedup factor
+
+### Requirements
+
+- Python 3 (for uchart visualization)
+- `show_stats.sh` - Main script (includes extraction + visualization)
+- `uchart.py` - Chart renderer ([MIT License](https://github.com/Danlino/uchart))
+
+### Credits
+
+This tool uses **uchart** by Danlino for terminal-based chart rendering.
+- Project: https://github.com/Danlino/uchart
+- License: MIT License
+- uchart is a standalone Python script with zero dependencies that creates beautiful charts using Unicode Braille characters.
 
 ## 💡 Tips
 
