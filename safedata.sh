@@ -118,36 +118,6 @@ log() {
   echo "$(date +"%Y-%m-%d %H:%M:%S") : ${MESSAGE}" | tee -a "${LOG_FILE}" | logger -t safedata
 }
 
-# Function to send GNOME notification
-send_notification() {
-  local TITLE="$1"
-  local MESSAGE="$2"
-  local URGENCY="${3:-normal}"  # low, normal, critical
-  local ICON="${4:-folder-download}"
-  local EXPIRE="${5:-5000}"  # expire time in milliseconds (default 5s)
-  
-  # Find the actual user (not root) - check who invoked sudo or use $SUDO_USER
-  local REAL_USER="${SUDO_USER:-$(logname 2>/dev/null || echo $USER)}"
-  
-  # Get the user's DBUS session
-  local DBUS_ADDRESS=$(ps -u "$REAL_USER" e | grep -o 'DBUS_SESSION_BUS_ADDRESS=[^ ]*' | head -n1 | cut -d= -f2-)
-  
-  if [ -n "$DBUS_ADDRESS" ] && [ -n "$REAL_USER" ]; then
-    # Use fixed replace-id so new notifications replace old ones
-    sudo -u "$REAL_USER" DBUS_SESSION_BUS_ADDRESS="$DBUS_ADDRESS" \
-      notify-send -u "$URGENCY" -i "$ICON" -t "$EXPIRE" \
-      -h string:x-canonical-private-synchronous:safedata \
-      "$TITLE" "$MESSAGE" 2>/dev/null || true
-  fi
-}
-
-# Function to log error and send notification
-log_error() {
-  local MESSAGE="$1"
-  log "$MESSAGE"
-  send_notification "SafeData ✗" "$MESSAGE" "critical" "dialog-error" "30000"
-}
-
 cleanup() {
   # Stop progress indicator on cleanup (including error scenarios)
   if [ -n "${ZENITY_PID}" ]; then
@@ -378,7 +348,7 @@ for VOL in "${VOLUMES[@]}"; do
   # ============================================
   log "Creating snapshot for ${VOL}"
   if ! lvcreate -L "${LVM_SNAP_SIZE}" -s -n "${SNAP_NAME}" "${ORIG_DEV}"; then
-    log_error "Chyba: Nelze vytvořit snapshot ${VOL}"
+    log "ERROR: Failed to create snapshot for ${VOL}"
     exit 1
   fi
 
@@ -403,7 +373,7 @@ for VOL in "${VOLUMES[@]}"; do
     if tar cvpz -C "${MNT_DIR}" ${TAR_ARGS} | ssh -i ~/.ssh/id_rsa_backupagent -p ${SSH_PORT} ${REMOTE_SSH_USER}@${REMOTE_SSH_HOST} "cat > ${REMOTE_BASE_DIR}/${VOL}_${TIMESTAMP}.tar.gz"; then
       log "Tar backup completed successfully for ${VOL}"
     else
-      log_error "Chyba: Tar zálohování selhalo pro ${VOL}"
+      log "ERROR: Tar backup failed for ${VOL}"
       cleanup
       exit 1
     fi
@@ -417,7 +387,7 @@ for VOL in "${VOLUMES[@]}"; do
     if rsync -azl ${RSYNC_ARGS} -e "ssh -p ${SSH_PORT}" -v "${MNT_DIR}/" "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}:${REMOTE_BASE_DIR}/${VOL}/"; then
       log "Rsync_notimestamp backup completed successfully for ${VOL}"
     else
-      log_error "Chyba: Rsync zálohování selhalo pro ${VOL}"
+      log "ERROR: Rsync_notimestamp backup failed for ${VOL}"
       cleanup
       exit 1
     fi
