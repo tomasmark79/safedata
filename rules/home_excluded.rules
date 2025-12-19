@@ -9,8 +9,16 @@ tmp
 .android
 .gradle
 .cache
-.local/share/Steam
 .thumbnails
+.config/Code/Backups
+.config/Code/DawnGraphiteCache
+.config/Code/DawnWebGPUCache
+.config/Code/GPUCache
+.config/Code/User/History
+.config/google-chrome/Default
+.config/google-chrome/GraphiteDawnCache
+.local/share/logs
+.local/share/Steam
 .local/share/Trash
 .local/share/flatpak
 .pyenv
