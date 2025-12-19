@@ -1,24 +1,29 @@
 #!/usr/bin/env bash
-# SafeData - Universal backup script
-# - with include/exclude support
-# - with suitable for LVM snapshot and folder backups
-# - with rsync and tar methods
-#
+
+# SafeData
+# Universal backup script
 # (c) Tomáš Mark 2023-2025
-# with help of the open source community and contributors
-#
 
 # ============================================
 # USER CONFIGURATION
 # ============================================
-VG_NAME="vg_main"                              # LVM volume group name
-SNAP_SIZE="80G"                                # LVM snapshot size
-LOG_FILE="/var/log/safedata.log"               # Log file path
-SSH_PORT=7922                                  # SSH port for remote backup
-SSH_USER="tomas"                               # SSH username
-SSH_HOST="192.168.79.11"                       # Remote backup server
-REMOTE_BASE_DIR="/volume1/homebackup/safedata" # Remote backup directory
+VG_NAME="vg_main"
+LVM_SNAP_SIZE="80G"
+LOG_FILE="/home/tomas/.local/share/safedata/logs/activity.log"
+SSH_PORT=7922
+REMOTE_SSH_USER="tomas"
+REMOTE_SSH_HOST="192.168.79.11"
+REMOTE_BASE_DIR="/volume1/homebackup/safedata"
 # ============================================
+
+# Create log directory and file as user before switching to root
+LOG_DIR="$(dirname "${LOG_FILE}")"
+if [ ! -d "$LOG_DIR" ]; then
+  mkdir -p "$LOG_DIR"
+fi
+if [ ! -f "$LOG_FILE" ]; then
+  touch "$LOG_FILE"
+fi
 
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
@@ -241,6 +246,8 @@ build_tar_args() {
   fi
 }
 
+log "==================== Starting SafeData Backup ===================="
+
 # Start time measurement
 START_TIME=$(date +%s)
 
@@ -275,7 +282,7 @@ for VOL in "${VOLUMES[@]}"; do
       
       echo "TAR_ARGS: ${TAR_ARGS}"
       
-      if tar cvpz -C "${SRC_DIR}" ${TAR_ARGS} | ssh -i ~/.ssh/id_rsa_backupagent -p ${SSH_PORT} ${SSH_USER}@${SSH_HOST} "cat > ${REMOTE_BASE_DIR}/$(basename "${SRC_DIR}")_${TIMESTAMP}.tar.gz"; then
+      if tar cvpz -C "${SRC_DIR}" ${TAR_ARGS} | ssh -i ~/.ssh/id_rsa_backupagent -p ${SSH_PORT} ${REMOTE_SSH_USER}@${REMOTE_SSH_HOST} "cat > ${REMOTE_BASE_DIR}/$(basename "${SRC_DIR}")_${TIMESTAMP}.tar.gz"; then
         log "Tar backup completed successfully for folder ${SRC_DIR}"
       else
         log "ERROR: Tar backup failed for folder ${SRC_DIR}"
@@ -288,7 +295,7 @@ for VOL in "${VOLUMES[@]}"; do
       RSYNC_ARGS=$(build_rsync_args "${RULES_MODE}" "${RULES_PATH}")
       echo "RSYNC_ARGS: ${RSYNC_ARGS}"
       
-      if rsync -azl ${RSYNC_ARGS} -e "ssh -p ${SSH_PORT}" -v "${SRC_DIR}/" "${SSH_USER}@${SSH_HOST}:${REMOTE_BASE_DIR}/$(basename "${SRC_DIR}")/"; then
+      if rsync -azl ${RSYNC_ARGS} -e "ssh -p ${SSH_PORT}" -v "${SRC_DIR}/" "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}:${REMOTE_BASE_DIR}/$(basename "${SRC_DIR}")/"; then
         log "Rsync backup completed successfully for folder ${SRC_DIR}"
       else
         log "ERROR: Rsync backup failed for folder ${SRC_DIR}"
@@ -302,7 +309,7 @@ for VOL in "${VOLUMES[@]}"; do
   # LVM SNAPSHOT BACKUPS
   # ============================================
   log "Creating snapshot for ${VOL}"
-  if ! lvcreate -L "${SNAP_SIZE}" -s -n "${SNAP_NAME}" "${ORIG_DEV}"; then
+  if ! lvcreate -L "${LVM_SNAP_SIZE}" -s -n "${SNAP_NAME}" "${ORIG_DEV}"; then
     log "ERROR: Failed to create snapshot for ${VOL}"
     exit 1
   fi
@@ -325,7 +332,7 @@ for VOL in "${VOLUMES[@]}"; do
     
     echo "TAR_ARGS: ${TAR_ARGS}"
     
-    if tar cvpz -C "${MNT_DIR}" ${TAR_ARGS} | ssh -i ~/.ssh/id_rsa_backupagent -p ${SSH_PORT} ${SSH_USER}@${SSH_HOST} "cat > ${REMOTE_BASE_DIR}/${VOL}_${TIMESTAMP}.tar.gz"; then
+    if tar cvpz -C "${MNT_DIR}" ${TAR_ARGS} | ssh -i ~/.ssh/id_rsa_backupagent -p ${SSH_PORT} ${REMOTE_SSH_USER}@${REMOTE_SSH_HOST} "cat > ${REMOTE_BASE_DIR}/${VOL}_${TIMESTAMP}.tar.gz"; then
       log "Tar backup completed successfully for ${VOL}"
     else
       log "ERROR: Tar backup failed for ${VOL}"
@@ -339,7 +346,7 @@ for VOL in "${VOLUMES[@]}"; do
     RSYNC_ARGS=$(build_rsync_args "${RULES_MODE}" "${RULES_PATH}")
     echo "RSYNC_ARGS: ${RSYNC_ARGS}"
     
-    if rsync -azl ${RSYNC_ARGS} -e "ssh -p ${SSH_PORT}" -v "${MNT_DIR}/" "${SSH_USER}@${SSH_HOST}:${REMOTE_BASE_DIR}/${VOL}/"; then
+    if rsync -azl ${RSYNC_ARGS} -e "ssh -p ${SSH_PORT}" -v "${MNT_DIR}/" "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}:${REMOTE_BASE_DIR}/${VOL}/"; then
       log "Rsync_notimestamp backup completed successfully for ${VOL}"
     else
       log "ERROR: Rsync_notimestamp backup failed for ${VOL}"
@@ -353,7 +360,7 @@ for VOL in "${VOLUMES[@]}"; do
     RSYNC_ARGS=$(build_rsync_args "${RULES_MODE}" "${RULES_PATH}")
     echo "RSYNC_ARGS: ${RSYNC_ARGS}"
     
-    if rsync -azl ${RSYNC_ARGS} -e "ssh -p ${SSH_PORT}" -v "${MNT_DIR}/" "${SSH_USER}@${SSH_HOST}:${REMOTE_BASE_DIR}/${VOL}_${TIMESTAMP}/"; then
+    if rsync -azl ${RSYNC_ARGS} -e "ssh -p ${SSH_PORT}" -v "${MNT_DIR}/" "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}:${REMOTE_BASE_DIR}/${VOL}_${TIMESTAMP}/"; then
       log "Rsync backup completed successfully for ${VOL}"
     else
       log "ERROR: Rsync backup failed for ${VOL}"
