@@ -6,6 +6,7 @@ lost+found
 opt/teamviewer
 usr/share/ollama
 lib/ollama
+swapfile
 
 # Temporary files:
 *.tmp
