@@ -320,7 +320,13 @@ for VOL in "${VOLUMES[@]}"; do
       
       echo "TAR_ARGS: ${TAR_ARGS}"
       
-      if tar cvpz -C "${SRC_DIR}" ${TAR_ARGS} | ssh -i ~/.ssh/id_rsa_backupagent -p ${SSH_PORT} ${REMOTE_SSH_USER}@${REMOTE_SSH_HOST} "cat > ${REMOTE_BASE_DIR}/$(hostname)_$(basename "${SRC_DIR}")_${TIMESTAMP}.tar.gz"; then
+      # Handle root directory specially
+      DIR_NAME=$(basename "${SRC_DIR}")
+      if [ "${DIR_NAME}" == "/" ] || [ "${SRC_DIR}" == "/" ]; then
+        DIR_NAME="root"
+      fi
+      
+      if tar cvpz -C "${SRC_DIR}" ${TAR_ARGS} | ssh -i ~/.ssh/id_rsa_backupagent -p ${SSH_PORT} ${REMOTE_SSH_USER}@${REMOTE_SSH_HOST} "cat > ${REMOTE_BASE_DIR}/$(hostname)_${DIR_NAME}_${TIMESTAMP}.tar.gz"; then
         log "Tar backup completed successfully for folder ${SRC_DIR}"
       else
         log "ERROR: Tar backup failed for folder ${SRC_DIR}"
@@ -333,7 +339,13 @@ for VOL in "${VOLUMES[@]}"; do
       RSYNC_ARGS=$(build_rsync_args "${RULES_MODE}" "${RULES_PATH}")
       echo "RSYNC_ARGS: ${RSYNC_ARGS}"
       
-      if rsync -azl ${RSYNC_ARGS} -e "ssh -p ${SSH_PORT}" -v "${SRC_DIR}/" "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}:${REMOTE_BASE_DIR}/$(basename "${SRC_DIR}")/"; then
+      # Handle root directory specially
+      DIR_NAME=$(basename "${SRC_DIR}")
+      if [ "${DIR_NAME}" == "/" ] || [ "${SRC_DIR}" == "/" ]; then
+        DIR_NAME="root"
+      fi
+      
+      if rsync -azl ${RSYNC_ARGS} -e "ssh -p ${SSH_PORT}" -v "${SRC_DIR}/" "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}:${REMOTE_BASE_DIR}/${DIR_NAME}/"; then
         log "Rsync backup completed successfully for folder ${SRC_DIR}"
       else
         log "ERROR: Rsync backup failed for folder ${SRC_DIR}"
