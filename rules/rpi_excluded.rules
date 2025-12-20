@@ -1,0 +1,35 @@
+# EXCLUDE rules for Raspberry Pi OS
+# These items will NOT be backed up
+# Everything else WILL be backed up
+# Paths are relative to the root directory
+
+lost+found
+swapfile
+
+# System temporary and runtime
+tmp
+var/tmp
+var/cache
+var/backups
+run
+mnt
+media
+
+# Virtual filesystems (should never be backed up)
+proc
+sys
+dev
+dev/pts
+
+# Logs (optional - comment out if you want to backup logs)
+var/log
+
+# Swap
+swap
+
+# Notes:
+# - No leading slashes
+# - No trailing slashes
+# - This is designed for full root (/) backup of Raspberry Pi OS
+# - Backs up: /home, /etc, /boot, /opt, /usr/local, /var/www, /root
+# - Excludes: temp files, caches, virtual filesystems, logs
