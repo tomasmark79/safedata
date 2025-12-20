@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../../../../tomas/.config/systemd/user"
+		},
+		{
+			"path": "../../../../tomas/.local/share/safedata/logs"
+		}
+	],
+	"settings": {}
+}
