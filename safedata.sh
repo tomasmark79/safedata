@@ -320,7 +320,7 @@ for VOL in "${VOLUMES[@]}"; do
       
       echo "TAR_ARGS: ${TAR_ARGS}"
       
-      if tar cvpz -C "${SRC_DIR}" ${TAR_ARGS} | ssh -i ~/.ssh/id_rsa_backupagent -p ${SSH_PORT} ${REMOTE_SSH_USER}@${REMOTE_SSH_HOST} "cat > ${REMOTE_BASE_DIR}/$(basename "${SRC_DIR}")_${TIMESTAMP}.tar.gz"; then
+      if tar cvpz -C "${SRC_DIR}" ${TAR_ARGS} | ssh -i ~/.ssh/id_rsa_backupagent -p ${SSH_PORT} ${REMOTE_SSH_USER}@${REMOTE_SSH_HOST} "cat > ${REMOTE_BASE_DIR}/$(hostname)_$(basename "${SRC_DIR}")_${TIMESTAMP}.tar.gz"; then
         log "Tar backup completed successfully for folder ${SRC_DIR}"
       else
         log "ERROR: Tar backup failed for folder ${SRC_DIR}"
@@ -370,7 +370,7 @@ for VOL in "${VOLUMES[@]}"; do
     
     echo "TAR_ARGS: ${TAR_ARGS}"
     
-    if tar cvpz -C "${MNT_DIR}" ${TAR_ARGS} | ssh -i ~/.ssh/id_rsa_backupagent -p ${SSH_PORT} ${REMOTE_SSH_USER}@${REMOTE_SSH_HOST} "cat > ${REMOTE_BASE_DIR}/${VOL}_${TIMESTAMP}.tar.gz"; then
+    if tar cvpz -C "${MNT_DIR}" ${TAR_ARGS} | ssh -i ~/.ssh/id_rsa_backupagent -p ${SSH_PORT} ${REMOTE_SSH_USER}@${REMOTE_SSH_HOST} "cat > ${REMOTE_BASE_DIR}/$(hostname)_${VOL}_${TIMESTAMP}.tar.gz"; then
       log "Tar backup completed successfully for ${VOL}"
     else
       log "ERROR: Tar backup failed for ${VOL}"
