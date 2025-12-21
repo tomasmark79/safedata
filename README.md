@@ -1,5 +1,10 @@
 # SafeData - Universal Backup Script
 
+> 🌱 **Help Keep This Going**
+> Your support makes a real difference. If you value my work and want to help me continue creating, please consider making a donation.  
+> 💙 **Donate here:** [https://paypal.me/TomasMark](https://paypal.me/TomasMark)
+> Every contribution is truly appreciated ✨
+
 Universal backup script with **include**, **exclude**, and **all** modes support.
 
 ## 🎯 Concept

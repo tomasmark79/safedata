@@ -14,7 +14,6 @@
 
 # fedora43 /, /usr/local, /var
 ~/dev/bash/safedata/safedata.sh root_excluded.rules tar lv_root_f43
-~/dev/bash/safedata/safedata.sh all.rules tar lv_usr_local_f43
 ~/dev/bash/safedata/safedata.sh var_excluded.rules tar lv_var_f43
 ```
 
@@ -29,7 +28,6 @@ backuphomes() {
 backupsystems() {
     ~/dev/bash/safedata/safedata.sh all.rules folder_tar /boot
     ~/dev/bash/safedata/safedata.sh root_excluded.rules tar lv_root_f43
-    ~/dev/bash/safedata/safedata.sh usrlocal_excluded.rules tar lv_usr_local_f43
     ~/dev/bash/safedata/safedata.sh var_excluded.rules tar lv_var_f43
 }
 ```
