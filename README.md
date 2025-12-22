@@ -174,6 +174,16 @@ Safedata includes a tool for extracting and visualizing backup statistics from l
 
 ### Quick Start
 
+**First-time setup** - Clone repository with submodules:
+```bash
+git clone --recursive https://github.com/your-username/safedata.git
+```
+
+Or if you already cloned without `--recursive`:
+```bash
+git submodule update --init --recursive
+```
+
 View statistics and graphs:
 ```bash
 ./show_stats.sh
@@ -215,7 +225,9 @@ This will:
 
 - Python 3 (for uchart visualization)
 - `show_stats.sh` - Main script (includes extraction + visualization)
-- `uchart.py` - Chart renderer ([MIT License](https://github.com/Danlino/uchart))
+- `uchart` submodule - Chart renderer ([MIT License](https://github.com/Danlino/uchart))
+
+**Note:** The `uchart` tool is included as a git submodule. Make sure to clone the repository with `--recursive` flag or run `git submodule update --init --recursive` to download it.
 
 ### Credits
 

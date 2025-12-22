@@ -21,7 +21,7 @@
 LOGS_DIR="${LOGS_DIR:-$HOME/.local/share/safedata/logs}"
 STATS_FILE="${STATS_FILE:-$LOGS_DIR/stats.csv}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-UCHART="${UCHART:-$SCRIPT_DIR/uchart.py}"
+UCHART="${UCHART:-$SCRIPT_DIR/uchart/uchart.py}"
 
 # Colors
 COLOR_SENT="\033[0;32m"
