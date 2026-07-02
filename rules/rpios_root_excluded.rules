@@ -12,6 +12,9 @@
 /sys
 /swap
 /swapfile
+/var/lib/apache2/fcgid/sock/*
+/var/lib/rspamd/rspamd.sock
+/var/spool/postfix/dev/log
 /var/spool/postfix/private/*
 /var/spool/postfix/public/*
 
