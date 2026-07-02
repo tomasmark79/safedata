@@ -303,8 +303,28 @@ run_with_ac_monitor() {
 run_shell_with_ac_monitor() {
   local description="$1"
   local command="$2"
+  local err_log
+  local status
 
-  run_with_ac_monitor "${description}" bash -o pipefail -c "${command}"
+  err_log=$(mktemp)
+
+  if run_with_ac_monitor "${description}" bash -o pipefail -c "${command}" 2> >(tee "${err_log}" >&2); then
+    rm -f "${err_log}"
+    return 0
+  fi
+
+  status=$?
+  log "ERROR: ${description} exited with status ${status}"
+
+  if [ -s "${err_log}" ]; then
+    log "Last stderr lines from ${description}:"
+    tail -n 20 "${err_log}" | while IFS= read -r line; do
+      log "  ${line}"
+    done
+  fi
+
+  rm -f "${err_log}"
+  return "${status}"
 }
 
 # Detect mode based on filename pattern (must be after log function is defined)
@@ -473,7 +493,7 @@ for VOL in "${VOLUMES[@]}"; do
         DIR_NAME="root"
       fi
       
-      if run_shell_with_ac_monitor "tar backup for folder ${SRC_DIR}" "tar cvpz -C \"${SRC_DIR}\" ${TAR_ARGS} | ssh -i \"${SSH_KEY_PATH}\" -p \"${SSH_PORT}\" \"${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}\" \"cat > ${REMOTE_BASE_DIR}/$(hostname)_${DIR_NAME}_${TIMESTAMP}.tar.gz\""; then
+      if run_shell_with_ac_monitor "tar backup for folder ${SRC_DIR}" "tar cpz -C \"${SRC_DIR}\" ${TAR_ARGS} | ssh -i \"${SSH_KEY_PATH}\" -p \"${SSH_PORT}\" \"${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}\" \"cat > ${REMOTE_BASE_DIR}/$(hostname)_${DIR_NAME}_${TIMESTAMP}.tar.gz\""; then
         log "Tar backup completed successfully for folder ${SRC_DIR}"
       else
         log "ERROR: Tar backup failed for folder ${SRC_DIR}"
@@ -529,7 +549,7 @@ for VOL in "${VOLUMES[@]}"; do
     
     echo "TAR_ARGS: ${TAR_ARGS}"
     
-    if run_shell_with_ac_monitor "tar backup for ${VOL}" "tar cvpz -C \"${MNT_DIR}\" ${TAR_ARGS} | ssh -i \"${SSH_KEY_PATH}\" -p \"${SSH_PORT}\" \"${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}\" \"cat > ${REMOTE_BASE_DIR}/$(hostname)_${VOL}_${TIMESTAMP}.tar.gz\""; then
+    if run_shell_with_ac_monitor "tar backup for ${VOL}" "tar cpz -C \"${MNT_DIR}\" ${TAR_ARGS} | ssh -i \"${SSH_KEY_PATH}\" -p \"${SSH_PORT}\" \"${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}\" \"cat > ${REMOTE_BASE_DIR}/$(hostname)_${VOL}_${TIMESTAMP}.tar.gz\""; then
       log "Tar backup completed successfully for ${VOL}"
     else
       log "ERROR: Tar backup failed for ${VOL}"
