@@ -47,6 +47,7 @@ set -euo pipefail
 MNT_DIR=""
 SNAP_NAME=""
 SNAP_DEV=""
+BACKUP_PID=""
 
 check_dependencies() {
   local -a required_cmds=("$@")
@@ -240,7 +241,38 @@ cleanup() {
   fi
 }
 
+terminate_backup() {
+  if [ -z "${BACKUP_PID}" ]; then
+    return 0
+  fi
+
+  if kill -0 "${BACKUP_PID}" 2>/dev/null; then
+    kill -TERM "-${BACKUP_PID}" 2>/dev/null || true
+    sleep 2
+    kill -KILL "-${BACKUP_PID}" 2>/dev/null || true
+    wait "${BACKUP_PID}" 2>/dev/null || true
+  fi
+
+  BACKUP_PID=""
+}
+
+handle_signal() {
+  local signal="$1"
+  local exit_code=143
+
+  if [ "${signal}" = "INT" ]; then
+    exit_code=130
+  fi
+
+  trap - INT TERM
+  log "Interrupted by ${signal}; stopping backup"
+  terminate_backup
+  exit "${exit_code}"
+}
+
 trap cleanup EXIT
+trap 'handle_signal INT' INT
+trap 'handle_signal TERM' TERM
 
 run_with_ac_monitor() {
   local description="$1"
@@ -250,16 +282,12 @@ run_with_ac_monitor() {
 
   setsid "$@" &
   backup_pid=$!
+  BACKUP_PID="${backup_pid}"
 
   while kill -0 "${backup_pid}" 2>/dev/null; do
     if ! is_on_ac_power; then
       log "ERROR: AC power disconnected during ${description}; stopping backup"
-      kill -TERM "-${backup_pid}" 2>/dev/null || true
-      sleep 2
-      if kill -0 "${backup_pid}" 2>/dev/null; then
-        kill -KILL "-${backup_pid}" 2>/dev/null || true
-      fi
-      wait "${backup_pid}" 2>/dev/null || true
+      terminate_backup
       return 75
     fi
 
@@ -268,6 +296,7 @@ run_with_ac_monitor() {
 
   wait "${backup_pid}"
   status=$?
+  BACKUP_PID=""
   return "${status}"
 }
 
@@ -541,8 +570,8 @@ for VOL in "${VOLUMES[@]}"; do
   cleanup
 done
 
-# Disable trap since all cleanups are done
-trap - EXIT
+# Disable traps since all cleanups are done
+trap - EXIT INT TERM
 
 # Calculate and display elapsed time
 END_TIME=$(date +%s)
