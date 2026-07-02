@@ -1,10 +1,9 @@
-# EXCLUDE rules - these items will NOT be backed up
-# Everything else WILL be backed up
-# Paths are relative to the source directory
+# EXCLUDE rules for Raspberry Pi OS root backup
+# These items will NOT be backed up.
+# Everything else WILL be backed up.
 
-.cache
-*.tmp
-lost+found
+/lost+found
+/tmp
 /mnt
 /media
 /dev
@@ -15,7 +14,6 @@ lost+found
 /swapfile
 
 # Notes:
-# - No leading slashes
-# - No trailing slashes
+# - Leading slash anchors the exclude to the root of the backed-up folder.
 # - Use wildcards: *, ?, []
-# - Lines starting with # are ignored
+# - Lines starting with # are ignored.
