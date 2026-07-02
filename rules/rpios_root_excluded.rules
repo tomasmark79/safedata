@@ -12,6 +12,8 @@
 /sys
 /swap
 /swapfile
+/var/spool/postfix/private/*
+/var/spool/postfix/public/*
 
 # Notes:
 # - Leading slash anchors the exclude to the root of the backed-up folder.

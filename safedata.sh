@@ -308,12 +308,14 @@ run_shell_with_ac_monitor() {
 
   err_log=$(mktemp)
 
-  if run_with_ac_monitor "${description}" bash -o pipefail -c "${command}" 2> >(tee "${err_log}" >&2); then
+  run_with_ac_monitor "${description}" bash -o pipefail -c "${command}" 2> >(tee "${err_log}" >&2)
+  status=$?
+
+  if [ "${status}" -eq 0 ]; then
     rm -f "${err_log}"
     return 0
   fi
 
-  status=$?
   log "ERROR: ${description} exited with status ${status}"
 
   if [ -s "${err_log}" ]; then
