@@ -1,0 +1,8 @@
+# ALL rules - backup EVERYTHING
+# No filters applied, complete backup of the entire volume/directory
+
+# Notes:
+# - No leading slashes
+# - No trailing slashes
+# - Use wildcards: *, ?, []
+# - Lines starting with # are ignored

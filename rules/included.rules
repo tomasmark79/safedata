@@ -1,0 +1,13 @@
+# INCLUDE rules - only these items will be backed up
+# Everything else will be ignored
+# Paths are relative to the source directory
+
+Documents/report.pdf
+Pictures/family.jpg
+.ssh/config
+
+# Notes:
+# - No leading slashes
+# - No trailing slashes
+# - Use wildcards: *, ?, []
+# - Lines starting with # are ignored
