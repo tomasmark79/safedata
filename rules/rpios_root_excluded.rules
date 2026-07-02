@@ -1,0 +1,21 @@
+# EXCLUDE rules - these items will NOT be backed up
+# Everything else WILL be backed up
+# Paths are relative to the source directory
+
+.cache
+*.tmp
+lost+found
+/mnt
+/media
+/dev
+/run
+/proc
+/sys
+/swap
+/swapfile
+
+# Notes:
+# - No leading slashes
+# - No trailing slashes
+# - Use wildcards: *, ?, []
+# - Lines starting with # are ignored
