@@ -177,7 +177,7 @@ Safedata includes a tool for extracting and visualizing backup statistics from l
 
 **First-time setup** - Clone repository with submodules:
 ```bash
-git clone --recursive https://github.com/your-username/safedata.git
+git clone --recursive https://github.com/tomasmark79/safedata.git
 ```
 
 Or if you already cloned without `--recursive`:
