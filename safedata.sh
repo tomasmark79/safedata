@@ -11,6 +11,7 @@ VG_NAME="${SAFEDATA_VG_NAME:-vg_main}"
 LVM_SNAP_SIZE="${SAFEDATA_LVM_SNAP_SIZE:-80G}"
 LOG_FILE="${SAFEDATA_LOG_FILE:-${HOME}/.local/share/safedata/logs/activity.log}"
 SSH_KEY_PATH="${SAFEDATA_SSH_KEY_PATH:?Set SAFEDATA_SSH_KEY_PATH}"
+SSH_KNOWN_HOSTS_PATH="${SAFEDATA_SSH_KNOWN_HOSTS_PATH:?Set SAFEDATA_SSH_KNOWN_HOSTS_PATH}"
 SSH_PORT="${SAFEDATA_SSH_PORT:-22}"
 REMOTE_SSH_USER="${SAFEDATA_REMOTE_SSH_USER:?Set SAFEDATA_REMOTE_SSH_USER}"
 REMOTE_SSH_HOST="${SAFEDATA_REMOTE_SSH_HOST:?Set SAFEDATA_REMOTE_SSH_HOST}"
@@ -35,13 +36,24 @@ fi
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
   echo "This script must be run as root. Re-running with sudo..."
-  exec sudo --preserve-env=SAFEDATA_VG_NAME,SAFEDATA_LVM_SNAP_SIZE,SAFEDATA_LOG_FILE,SAFEDATA_SSH_KEY_PATH,SAFEDATA_SSH_PORT,SAFEDATA_REMOTE_SSH_USER,SAFEDATA_REMOTE_SSH_HOST,SAFEDATA_REMOTE_BASE_DIR,SAFEDATA_SSH_CONNECT_TIMEOUT,SAFEDATA_SSH_RETRY_COUNT,SAFEDATA_SSH_RETRY_DELAY,SAFEDATA_AC_CHECK_INTERVAL bash "$0" "$@"
+  exec sudo --preserve-env=SAFEDATA_VG_NAME,SAFEDATA_LVM_SNAP_SIZE,SAFEDATA_LOG_FILE,SAFEDATA_SSH_KEY_PATH,SAFEDATA_SSH_KNOWN_HOSTS_PATH,SAFEDATA_SSH_PORT,SAFEDATA_REMOTE_SSH_USER,SAFEDATA_REMOTE_SSH_HOST,SAFEDATA_REMOTE_BASE_DIR,SAFEDATA_SSH_CONNECT_TIMEOUT,SAFEDATA_SSH_RETRY_COUNT,SAFEDATA_SSH_RETRY_DELAY,SAFEDATA_AC_CHECK_INTERVAL bash "$0" "$@"
 fi
 
 # Get the directory of the script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 set -euo pipefail
+
+SSH_OPTIONS=(
+  -i "${SSH_KEY_PATH}"
+  -p "${SSH_PORT}"
+  -o BatchMode=yes
+  -o IdentitiesOnly=yes
+  -o StrictHostKeyChecking=yes
+  -o "UserKnownHostsFile=${SSH_KNOWN_HOSTS_PATH}"
+  -o "ConnectTimeout=${SSH_CONNECT_TIMEOUT}"
+)
+printf -v SSH_COMMAND '%q ' ssh "${SSH_OPTIONS[@]}"
 
 # Initialize variables for cleanup trap
 MNT_DIR=""
@@ -106,7 +118,7 @@ check_ssh_connection() {
 
   echo "Verifying SSH connection to ${REMOTE_SSH_HOST}..."
   for ((attempt = 1; attempt <= SSH_RETRY_COUNT; attempt++)); do
-    if ssh -i "${SSH_KEY_PATH}" -p "${SSH_PORT}" -o ConnectTimeout="${SSH_CONNECT_TIMEOUT}" -o BatchMode=yes \
+    if ssh "${SSH_OPTIONS[@]}" \
          "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}" "echo 'SSH connection OK'" &>/dev/null; then
       echo "SSH connection verified."
       return 0
@@ -347,17 +359,18 @@ else
 fi
 
 # Function to build rsync arguments based on rules mode
+RSYNC_ARGS=()
 build_rsync_args() {
   local mode="$1"
   local rules_file="$2"
-  local args=""
+  RSYNC_ARGS=()
   
   if [ "$mode" == "all" ]; then
     # ALL mode - no filters
-    args=""
+    return 0
   elif [ "$mode" == "exclude" ]; then
     # EXCLUDE mode - simple, just exclude listed items
-    args="--exclude-from=${rules_file}"
+    RSYNC_ARGS+=("--exclude-from=${rules_file}")
   else
     # INCLUDE mode - complex, need parent directories
     declare -A parent_dirs
@@ -370,7 +383,8 @@ build_rsync_args() {
       
       # Extract parent directories
       if [[ "$line" == */* ]]; then
-        local parent=$(dirname "$line")
+        local parent
+        parent=$(dirname "$line")
         while [[ "$parent" != "." ]]; do
           parent_dirs["$parent/"]=1
           parent=$(dirname "$parent")
@@ -382,31 +396,28 @@ build_rsync_args() {
     
     # Build arguments: parents first
     for parent in "${!parent_dirs[@]}"; do
-      args="${args} --include=${parent}"
+      RSYNC_ARGS+=("--include=${parent}")
     done
     
     # Then actual patterns
     for pattern in "${include_patterns[@]}"; do
       if [[ ! "$pattern" =~ \* ]]; then
-        args="${args} --include=${pattern}"
-        args="${args} --include=${pattern}/**"
+        RSYNC_ARGS+=("--include=${pattern}")
+        RSYNC_ARGS+=("--include=${pattern}/**")
       else
-        args="${args} --include=${pattern}"
+        RSYNC_ARGS+=("--include=${pattern}")
       fi
     done
     
     # Exclude everything else
-    args="${args} --exclude=*"
+    RSYNC_ARGS+=("--exclude=*")
   fi
-  
-  echo "$args"
 }
 
 # Function to build tar arguments based on rules mode
 build_tar_args() {
   local mode="$1"
   local rules_file="$2"
-  local args=""
   
   if [ "$mode" == "all" ]; then
     # ALL mode - backup everything (use .)
@@ -495,7 +506,7 @@ for VOL in "${VOLUMES[@]}"; do
         DIR_NAME="root"
       fi
       
-      if run_shell_with_ac_monitor "tar backup for folder ${SRC_DIR}" "tar cpz -C \"${SRC_DIR}\" ${TAR_ARGS} | ssh -i \"${SSH_KEY_PATH}\" -p \"${SSH_PORT}\" \"${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}\" \"cat > ${REMOTE_BASE_DIR}/$(hostname)_${DIR_NAME}_${TIMESTAMP}.tar.gz\""; then
+      if run_shell_with_ac_monitor "tar backup for folder ${SRC_DIR}" "tar cpz -C \"${SRC_DIR}\" ${TAR_ARGS} | ${SSH_COMMAND}\"${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}\" \"cat > ${REMOTE_BASE_DIR}/$(hostname)_${DIR_NAME}_${TIMESTAMP}.tar.gz\""; then
         log "Tar backup completed successfully for folder ${SRC_DIR}"
       else
         log "ERROR: Tar backup failed for folder ${SRC_DIR}"
@@ -505,8 +516,8 @@ for VOL in "${VOLUMES[@]}"; do
     else # folder_rsync
       log "Starting rsync backup for folder ${SRC_DIR}"
       
-      RSYNC_ARGS=$(build_rsync_args "${RULES_MODE}" "${RULES_PATH}")
-      echo "RSYNC_ARGS: ${RSYNC_ARGS}"
+      build_rsync_args "${RULES_MODE}" "${RULES_PATH}"
+      printf 'RSYNC_ARGS:'; printf ' %q' "${RSYNC_ARGS[@]}"; printf '\n'
       
       # Handle root directory specially
       DIR_NAME=$(basename "${SRC_DIR}")
@@ -514,7 +525,7 @@ for VOL in "${VOLUMES[@]}"; do
         DIR_NAME="root"
       fi
       
-      if run_with_ac_monitor "rsync backup for folder ${SRC_DIR}" rsync -al ${RSYNC_ARGS} -e "ssh -p ${SSH_PORT}" -v "${SRC_DIR}/" "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}:${REMOTE_BASE_DIR}/${DIR_NAME}/"; then
+      if run_with_ac_monitor "rsync backup for folder ${SRC_DIR}" rsync -al "${RSYNC_ARGS[@]}" -e "${SSH_COMMAND}" -v "${SRC_DIR}/" "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}:${REMOTE_BASE_DIR}/${DIR_NAME}/"; then
         log "Rsync backup completed successfully for folder ${SRC_DIR}"
       else
         log "ERROR: Rsync backup failed for folder ${SRC_DIR}"
@@ -551,7 +562,7 @@ for VOL in "${VOLUMES[@]}"; do
     
     echo "TAR_ARGS: ${TAR_ARGS}"
     
-    if run_shell_with_ac_monitor "tar backup for ${VOL}" "tar cpz -C \"${MNT_DIR}\" ${TAR_ARGS} | ssh -i \"${SSH_KEY_PATH}\" -p \"${SSH_PORT}\" \"${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}\" \"cat > ${REMOTE_BASE_DIR}/$(hostname)_${VOL}_${TIMESTAMP}.tar.gz\""; then
+    if run_shell_with_ac_monitor "tar backup for ${VOL}" "tar cpz -C \"${MNT_DIR}\" ${TAR_ARGS} | ${SSH_COMMAND}\"${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}\" \"cat > ${REMOTE_BASE_DIR}/$(hostname)_${VOL}_${TIMESTAMP}.tar.gz\""; then
       log "Tar backup completed successfully for ${VOL}"
     else
       log "ERROR: Tar backup failed for ${VOL}"
@@ -562,10 +573,10 @@ for VOL in "${VOLUMES[@]}"; do
   elif [ "${BACKUP_METHOD}" == "rsync_notimestamp" ]; then
     log "Starting rsync_notimestamp for ${VOL}"
     
-    RSYNC_ARGS=$(build_rsync_args "${RULES_MODE}" "${RULES_PATH}")
-    echo "RSYNC_ARGS: ${RSYNC_ARGS}"
+    build_rsync_args "${RULES_MODE}" "${RULES_PATH}"
+    printf 'RSYNC_ARGS:'; printf ' %q' "${RSYNC_ARGS[@]}"; printf '\n'
     
-    if run_with_ac_monitor "rsync_notimestamp for ${VOL}" rsync -al ${RSYNC_ARGS} -e "ssh -p ${SSH_PORT}" -v "${MNT_DIR}/" "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}:${REMOTE_BASE_DIR}/${VOL}/"; then
+    if run_with_ac_monitor "rsync_notimestamp for ${VOL}" rsync -al "${RSYNC_ARGS[@]}" -e "${SSH_COMMAND}" -v "${MNT_DIR}/" "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}:${REMOTE_BASE_DIR}/${VOL}/"; then
       log "Rsync_notimestamp backup completed successfully for ${VOL}"
     else
       log "ERROR: Rsync_notimestamp backup failed for ${VOL}"
@@ -576,10 +587,10 @@ for VOL in "${VOLUMES[@]}"; do
   elif [ "${BACKUP_METHOD}" == "rsync" ]; then
     log "Starting rsync for ${VOL}"
     
-    RSYNC_ARGS=$(build_rsync_args "${RULES_MODE}" "${RULES_PATH}")
-    echo "RSYNC_ARGS: ${RSYNC_ARGS}"
+    build_rsync_args "${RULES_MODE}" "${RULES_PATH}"
+    printf 'RSYNC_ARGS:'; printf ' %q' "${RSYNC_ARGS[@]}"; printf '\n'
     
-    if run_with_ac_monitor "rsync backup for ${VOL}" rsync -al ${RSYNC_ARGS} -e "ssh -p ${SSH_PORT}" -v "${MNT_DIR}/" "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}:${REMOTE_BASE_DIR}/${VOL}_${TIMESTAMP}/"; then
+    if run_with_ac_monitor "rsync backup for ${VOL}" rsync -al "${RSYNC_ARGS[@]}" -e "${SSH_COMMAND}" -v "${MNT_DIR}/" "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}:${REMOTE_BASE_DIR}/${VOL}_${TIMESTAMP}/"; then
       log "Rsync backup completed successfully for ${VOL}"
     else
       log "ERROR: Rsync backup failed for ${VOL}"

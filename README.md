@@ -105,6 +105,7 @@ Configure SafeData with environment variables. Keep host-specific values in your
 
 ```bash
 export SAFEDATA_SSH_KEY_PATH="/path/to/backup_key"
+export SAFEDATA_SSH_KNOWN_HOSTS_PATH="/path/to/known_hosts"
 export SAFEDATA_REMOTE_SSH_USER="backup-user"
 export SAFEDATA_REMOTE_SSH_HOST="backup.example.com"
 export SAFEDATA_REMOTE_BASE_DIR="/remote/backup/safedata"
@@ -120,7 +121,7 @@ export SAFEDATA_SSH_RETRY_DELAY="15"
 export SAFEDATA_AC_CHECK_INTERVAL="10"
 ```
 
-Required variables are `SAFEDATA_SSH_KEY_PATH`, `SAFEDATA_REMOTE_SSH_USER`, `SAFEDATA_REMOTE_SSH_HOST`, and `SAFEDATA_REMOTE_BASE_DIR`.
+Required variables are `SAFEDATA_SSH_KEY_PATH`, `SAFEDATA_SSH_KNOWN_HOSTS_PATH`, `SAFEDATA_REMOTE_SSH_USER`, `SAFEDATA_REMOTE_SSH_HOST`, and `SAFEDATA_REMOTE_BASE_DIR`.
 
 ## 🔄 How LVM Snapshot Works
 
