@@ -4,7 +4,7 @@
 
 Universal backup script with **include**, **exclude**, and **all** modes support.
 
-## 🎯 Concept
+## Concept
 
 **One script, three modes:**
 
@@ -12,7 +12,7 @@ Universal backup script with **include**, **exclude**, and **all** modes support
 2. **EXCLUDE mode** - backup **everything except** listed items
 3. **ALL mode** - backup **absolutely everything** (no filters)
 
-## 📋 Usage
+## Usage
 
 ```bash
 ./safedata.sh <RULES_FILE> <BACKUP_METHOD> <VOLUME1> [VOLUME2 ...]
@@ -43,7 +43,7 @@ Mode is detected from filename pattern. Rules files are stored in `./rules/` dir
 - LVM volume name (e.g., `lv_home`, `lv_var`)
 - Directory path (e.g., `/boot`) for folder_* methods
 
-## 🚀 Examples
+## Examples
 
 ### Include only selected files
 ```bash
@@ -60,7 +60,7 @@ sudo ./safedata.sh excluded.rules tar lv_home
 sudo ./safedata.sh all.rules tar lv_root
 ```
 
-## 📝 Rules File Configuration
+## Rules File Configuration
 
 ### all.rules (All mode)
 ```bash
@@ -96,7 +96,7 @@ lost+found
 - Supports wildcards
 - Everything else will be backed up
 
-## ⚙️ Configuration
+## Configuration
 
 Configure SafeData with environment variables. Keep host-specific values in your shell, systemd unit, NixOS module, or another private deployment layer.
 
@@ -120,7 +120,7 @@ export SAFEDATA_AC_CHECK_INTERVAL="10"
 
 Required variables are `SAFEDATA_SSH_KEY_PATH`, `SAFEDATA_SSH_KNOWN_HOSTS_PATH`, `SAFEDATA_REMOTE_SSH_USER`, `SAFEDATA_REMOTE_SSH_HOST`, and `SAFEDATA_REMOTE_BASE_DIR`.
 
-## 🔄 How LVM Snapshot Works
+## How LVM Snapshot Works
 
 1. Script creates LVM volume snapshot
 2. Mounts snapshot to `/mnt/snap_*`
@@ -129,7 +129,7 @@ Required variables are `SAFEDATA_SSH_KEY_PATH`, `SAFEDATA_SSH_KNOWN_HOSTS_PATH`,
 
 **Advantage:** System can run normally while snapshot captures the state at a specific moment.
 
-## ⚠️ Important Notes
+## Important Notes
 
 ### Symlinks
 Script preserves symlinks **as symlinks** (not their content) with original absolute paths. For proper restoration, restore both source directory and symlink targets.
@@ -144,7 +144,7 @@ LVM snapshot **does not capture** bind mounts! Bind mounts are at filesystem lev
 sudo ./safedata.sh included.rules folder_rsync /mnt/data/photos
 ```
 
-## 📊 Mode Comparison
+## Mode Comparison
 
 | Situation | Mode | Reason |
 |---------|-------|-------|
@@ -155,7 +155,7 @@ sudo ./safedata.sh included.rules folder_rsync /mnt/data/photos
 | Regular /home backup | **include** | Save space, backup only important |
 | System partition (/var, /root) | **all** or **exclude** | Better to have everything |
 
-## 🔍 Logging
+## Logging
 
 Logs are saved to:
 ```bash
@@ -167,7 +167,7 @@ And to systemd journal:
 journalctl -t safedata
 ```
 
-## 📊 Statistics and Monitoring
+## Statistics and Monitoring
 
 Safedata includes a tool for extracting and visualizing backup statistics from logs.
 
@@ -266,7 +266,7 @@ This tool uses **uchart** by Danlino for terminal-based chart rendering.
 - License: MIT License
 - uchart is a standalone Python script with zero dependencies that creates beautiful charts using Unicode Braille characters.
 
-## 💡 Tips
+## Tips
 
 ### Testing rules before backup
 ```bash
