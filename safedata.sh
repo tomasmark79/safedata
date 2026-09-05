@@ -9,20 +9,20 @@
 # ============================================
 VG_NAME="${SAFEDATA_VG_NAME:-vg_main}"
 LVM_SNAP_SIZE="${SAFEDATA_LVM_SNAP_SIZE:-80G}"
-LOG_FILE="${SAFEDATA_FULL_LOG_FILE:-${HOME}/.local/share/safedata/logs/full_activity.log}"
+LOG_FILE="${SAFEDATA_LOG_FILE:-${HOME}/.local/share/safedata/logs/activity.log}"
 SSH_KEY_PATH="${SAFEDATA_SSH_KEY_PATH:?Set SAFEDATA_SSH_KEY_PATH}"
 SSH_KNOWN_HOSTS_PATH="${SAFEDATA_SSH_KNOWN_HOSTS_PATH:?Set SAFEDATA_SSH_KNOWN_HOSTS_PATH}"
 SSH_PORT="${SAFEDATA_SSH_PORT:-22}"
 REMOTE_SSH_USER="${SAFEDATA_REMOTE_SSH_USER:?Set SAFEDATA_REMOTE_SSH_USER}"
 REMOTE_SSH_HOST="${SAFEDATA_REMOTE_SSH_HOST:?Set SAFEDATA_REMOTE_SSH_HOST}"
-REMOTE_BASE_DIR="${SAFEDATA_FULL_REMOTE_BASE_DIR:?Set SAFEDATA_FULL_REMOTE_BASE_DIR to a dedicated test directory}"
+REMOTE_BASE_DIR="${SAFEDATA_REMOTE_BASE_DIR:?Set SAFEDATA_REMOTE_BASE_DIR}"
 SSH_CONNECT_TIMEOUT="${SAFEDATA_SSH_CONNECT_TIMEOUT:-10}"
 SSH_RETRY_COUNT="${SAFEDATA_SSH_RETRY_COUNT:-6}"
 SSH_RETRY_DELAY="${SAFEDATA_SSH_RETRY_DELAY:-15}"
 AC_CHECK_INTERVAL="${SAFEDATA_AC_CHECK_INTERVAL:-10}"
 # ============================================
 
-export SAFEDATA_FULL_LOG_FILE="${LOG_FILE}"
+export SAFEDATA_LOG_FILE="${LOG_FILE}"
 
 # Create log directory and file as user before switching to root
 LOG_DIR="$(dirname "${LOG_FILE}")"
@@ -36,7 +36,7 @@ fi
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
   echo "This script must be run as root. Re-running with sudo..."
-  exec sudo --preserve-env=SAFEDATA_VG_NAME,SAFEDATA_LVM_SNAP_SIZE,SAFEDATA_FULL_LOG_FILE,SAFEDATA_SSH_KEY_PATH,SAFEDATA_SSH_KNOWN_HOSTS_PATH,SAFEDATA_SSH_PORT,SAFEDATA_REMOTE_SSH_USER,SAFEDATA_REMOTE_SSH_HOST,SAFEDATA_FULL_REMOTE_BASE_DIR,SAFEDATA_SSH_CONNECT_TIMEOUT,SAFEDATA_SSH_RETRY_COUNT,SAFEDATA_SSH_RETRY_DELAY,SAFEDATA_AC_CHECK_INTERVAL bash "$0" "$@"
+  exec sudo --preserve-env=SAFEDATA_VG_NAME,SAFEDATA_LVM_SNAP_SIZE,SAFEDATA_LOG_FILE,SAFEDATA_SSH_KEY_PATH,SAFEDATA_SSH_KNOWN_HOSTS_PATH,SAFEDATA_SSH_PORT,SAFEDATA_REMOTE_SSH_USER,SAFEDATA_REMOTE_SSH_HOST,SAFEDATA_REMOTE_BASE_DIR,SAFEDATA_SSH_CONNECT_TIMEOUT,SAFEDATA_SSH_RETRY_COUNT,SAFEDATA_SSH_RETRY_DELAY,SAFEDATA_AC_CHECK_INTERVAL bash "$0" "$@"
 fi
 
 # Get the directory of the script
@@ -153,8 +153,7 @@ check_ssh_connection() {
   exit 1
 }
 
-# Refuse to start unless the dedicated remote target already exists and is
-# writable. Keeping experimental backups separate protects production data.
+# Refuse to start unless the configured remote target exists and is writable.
 check_remote_target() {
   local quoted_remote_dir
   printf -v quoted_remote_dir '%q' "${REMOTE_BASE_DIR}"
@@ -165,7 +164,7 @@ check_remote_target() {
        "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}" \
        "test -d ${quoted_remote_dir} && test -w ${quoted_remote_dir}"; then
     echo "ERROR: Full-metadata backup target does not exist or is not writable: ${REMOTE_BASE_DIR}"
-    echo "Create a dedicated test directory and set SAFEDATA_FULL_REMOTE_BASE_DIR to it."
+    echo "Create the directory and make it writable, then check SAFEDATA_REMOTE_BASE_DIR."
     exit 1
   fi
 }
@@ -248,8 +247,7 @@ METADATA:
   tar preserves numeric IDs, ACLs, xattrs, SELinux metadata, and sparse files.
 
 REMOTE TARGET:
-  SAFEDATA_FULL_REMOTE_BASE_DIR must point to a dedicated, existing, writable
-  directory. Do not use the production backup directory while testing.
+  SAFEDATA_REMOTE_BASE_DIR must point to an existing, writable directory.
 
 VOLUME:
   - LVM volume name (e.g., lv_home, lv_var) for snapshot-based backups

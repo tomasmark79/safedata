@@ -81,7 +81,7 @@ sudo mkdir -p /mnt/restore/lv_home
 # Restore the non-timestamped rsync backup
 sudo rsync -aHAXS --numeric-ids -M--fake-super \
   -e "ssh -i ${SAFEDATA_SSH_KEY_PATH} -o UserKnownHostsFile=${SAFEDATA_SSH_KNOWN_HOSTS_PATH} -p ${SAFEDATA_SSH_PORT:-22}" \
-  "${SAFEDATA_REMOTE_SSH_USER}@${SAFEDATA_REMOTE_SSH_HOST}:${SAFEDATA_FULL_REMOTE_BASE_DIR}/lv_home/" \
+  "${SAFEDATA_REMOTE_SSH_USER}@${SAFEDATA_REMOTE_SSH_HOST}:${SAFEDATA_REMOTE_BASE_DIR}/lv_home/" \
   /mnt/restore/lv_home/
 ```
 
@@ -107,7 +107,7 @@ ssh -i "${SAFEDATA_SSH_KEY_PATH}" \
   -o "UserKnownHostsFile=${SAFEDATA_SSH_KNOWN_HOSTS_PATH}" \
   -p "${SAFEDATA_SSH_PORT:-22}" \
   "${SAFEDATA_REMOTE_SSH_USER}@${SAFEDATA_REMOTE_SSH_HOST}" \
-  "cat '${SAFEDATA_FULL_REMOTE_BASE_DIR}/<hostname>_lv_home_<timestamp>.tar.gz'" \
+  "cat '${SAFEDATA_REMOTE_BASE_DIR}/<hostname>_lv_home_<timestamp>.tar.gz'" \
   | sudo tar --extract --gzip --same-owner --same-permissions --numeric-owner \
       --acls --xattrs --xattrs-include='*' --selinux --sparse \
       -C /mnt/restore/lv_home/
@@ -135,7 +135,7 @@ ssh -i "${SAFEDATA_SSH_KEY_PATH}" \
   -o "UserKnownHostsFile=${SAFEDATA_SSH_KNOWN_HOSTS_PATH}" \
   -p "${SAFEDATA_SSH_PORT:-22}" \
   "${SAFEDATA_REMOTE_SSH_USER}@${SAFEDATA_REMOTE_SSH_HOST}" \
-  "cat '${SAFEDATA_FULL_REMOTE_BASE_DIR}/<hostname>_lv_root_<timestamp>.tar.gz'" \
+  "cat '${SAFEDATA_REMOTE_BASE_DIR}/<hostname>_lv_root_<timestamp>.tar.gz'" \
   | sudo tar --extract --gzip --same-owner --same-permissions --numeric-owner \
       --acls --xattrs --xattrs-include='*' --selinux --sparse \
       -C /mnt/restore/lv_root/
@@ -161,7 +161,7 @@ ssh -i "${SAFEDATA_SSH_KEY_PATH}" \
   -o "UserKnownHostsFile=${SAFEDATA_SSH_KNOWN_HOSTS_PATH}" \
   -p "${SAFEDATA_SSH_PORT:-22}" \
   "${SAFEDATA_REMOTE_SSH_USER}@${SAFEDATA_REMOTE_SSH_HOST}" \
-  "ls -1d '${SAFEDATA_FULL_REMOTE_BASE_DIR}'/lv_home_*"
+  "ls -1d '${SAFEDATA_REMOTE_BASE_DIR}'/lv_home_*"
 
 # Create a temporary restore directory
 sudo mkdir -p /mnt/restore/lv_home
@@ -169,7 +169,7 @@ sudo mkdir -p /mnt/restore/lv_home
 # Restore the selected timestamped backup
 sudo rsync -aHAXS --numeric-ids -M--fake-super \
   -e "ssh -i ${SAFEDATA_SSH_KEY_PATH} -o UserKnownHostsFile=${SAFEDATA_SSH_KNOWN_HOSTS_PATH} -p ${SAFEDATA_SSH_PORT:-22}" \
-  "${SAFEDATA_REMOTE_SSH_USER}@${SAFEDATA_REMOTE_SSH_HOST}:${SAFEDATA_FULL_REMOTE_BASE_DIR}/lv_home_<timestamp>/" \
+  "${SAFEDATA_REMOTE_SSH_USER}@${SAFEDATA_REMOTE_SSH_HOST}:${SAFEDATA_REMOTE_BASE_DIR}/lv_home_<timestamp>/" \
   /mnt/restore/lv_home/
 ```
 
@@ -230,12 +230,12 @@ export SAFEDATA_SSH_KEY_PATH="/path/to/backup_key"
 export SAFEDATA_SSH_KNOWN_HOSTS_PATH="/path/to/known_hosts"
 export SAFEDATA_REMOTE_SSH_USER="backup-user"
 export SAFEDATA_REMOTE_SSH_HOST="backup.example.com"
-export SAFEDATA_FULL_REMOTE_BASE_DIR="/remote/backup/safedata-full-test"
+export SAFEDATA_REMOTE_BASE_DIR="/remote/backup/safedata"
 
 # Optional defaults:
 export SAFEDATA_VG_NAME="vg_main"
 export SAFEDATA_LVM_SNAP_SIZE="80G"
-export SAFEDATA_FULL_LOG_FILE="$HOME/.local/share/safedata/logs/full_activity.log"
+export SAFEDATA_LOG_FILE="$HOME/.local/share/safedata/logs/activity.log"
 export SAFEDATA_SSH_PORT="22"
 export SAFEDATA_SSH_CONNECT_TIMEOUT="10"
 export SAFEDATA_SSH_RETRY_COUNT="6"
@@ -245,15 +245,14 @@ export SAFEDATA_AC_CHECK_INTERVAL="10"
 
 Required variables are `SAFEDATA_SSH_KEY_PATH`,
 `SAFEDATA_SSH_KNOWN_HOSTS_PATH`, `SAFEDATA_REMOTE_SSH_USER`,
-`SAFEDATA_REMOTE_SSH_HOST`, and `SAFEDATA_FULL_REMOTE_BASE_DIR`.
+`SAFEDATA_REMOTE_SSH_HOST`, and `SAFEDATA_REMOTE_BASE_DIR`.
 
-The directory specified by `SAFEDATA_FULL_REMOTE_BASE_DIR` must be a dedicated
-test location that already exists on the remote server. The SSH user must be
-able to write files and user extended attributes there. SafeData deliberately
-does not fall back to the production `SAFEDATA_REMOTE_BASE_DIR`.
+The directory specified by `SAFEDATA_REMOTE_BASE_DIR` must already exist on the
+remote server. The SSH user must be able to write files and user extended
+attributes there.
 
 Before every rsync run, SafeData creates and removes a small hidden probe in the
-dedicated target. The backup starts only if the probe confirms that remote
+configured target. The backup starts only if the probe confirms that remote
 `--fake-super` metadata can be stored successfully.
 
 ## How LVM Snapshot Works
@@ -321,7 +320,7 @@ blocked.
 SafeData appends operational messages to:
 
 ```bash
-$HOME/.local/share/safedata/logs/full_activity.log
+$HOME/.local/share/safedata/logs/activity.log
 ```
 
 The same operational messages are also sent to the systemd journal:
@@ -330,9 +329,9 @@ The same operational messages are also sent to the systemd journal:
 journalctl -t safedata
 ```
 
-The `full_activity.log` file does not contain the complete `rsync` output
-required by the statistics viewer. To collect statistics, capture each `rsync`
-backup run in a separate timestamped log:
+The `activity.log` file does not contain the complete `rsync` output required by
+the statistics viewer. To collect statistics, capture each `rsync` backup run in
+a separate timestamped log:
 
 ```bash
 # Make pipeline failures propagate to the shell
