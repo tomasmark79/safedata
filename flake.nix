@@ -1,5 +1,5 @@
 {
-  description = "SafeData backup script";
+  description = "SafeData full-metadata backup script";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 

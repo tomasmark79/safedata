@@ -1,10 +1,10 @@
-# SafeData - Universal Backup Script
+# SafeData - Full-Metadata Backup Script
 
 [![PayPal](https://img.shields.io/badge/PayPal-Donate-blue?logo=paypal)](https://paypal.me/TomasMark)
 
 Universal backup script for LVM volumes and regular directories. It supports
 `rsync` and `tar` backups with **include**, **exclude**, or **all** filtering
-rules.
+rules while preserving extended filesystem metadata.
 
 ## Concept
 
@@ -55,9 +55,10 @@ delete remote files that have disappeared from the source.
 ## Examples
 
 SafeData creates backups but does not provide a separate restore command. Restore
-data directly with `rsync` or `tar`, depending on the backup method used. The
-restore commands below use the environment variables from the
-[Configuration](#configuration) section.
+data directly with `rsync` or `tar`, depending on the backup method used. Always
+use the metadata options shown below: rsync privileged metadata is encoded using
+`--fake-super` and would otherwise not be restored. The commands use the
+environment variables from the [Configuration](#configuration) section.
 
 > Restore into an empty temporary directory first. Verify its contents before
 > copying data to the original filesystem.
@@ -78,9 +79,9 @@ restore commands below use the environment variables from the
 sudo mkdir -p /mnt/restore/lv_home
 
 # Restore the non-timestamped rsync backup
-sudo rsync -al \
+sudo rsync -aHAXS --numeric-ids -M--fake-super \
   -e "ssh -i ${SAFEDATA_SSH_KEY_PATH} -o UserKnownHostsFile=${SAFEDATA_SSH_KNOWN_HOSTS_PATH} -p ${SAFEDATA_SSH_PORT:-22}" \
-  "${SAFEDATA_REMOTE_SSH_USER}@${SAFEDATA_REMOTE_SSH_HOST}:${SAFEDATA_REMOTE_BASE_DIR}/lv_home/" \
+  "${SAFEDATA_REMOTE_SSH_USER}@${SAFEDATA_REMOTE_SSH_HOST}:${SAFEDATA_FULL_REMOTE_BASE_DIR}/lv_home/" \
   /mnt/restore/lv_home/
 ```
 
@@ -106,8 +107,10 @@ ssh -i "${SAFEDATA_SSH_KEY_PATH}" \
   -o "UserKnownHostsFile=${SAFEDATA_SSH_KNOWN_HOSTS_PATH}" \
   -p "${SAFEDATA_SSH_PORT:-22}" \
   "${SAFEDATA_REMOTE_SSH_USER}@${SAFEDATA_REMOTE_SSH_HOST}" \
-  "cat '${SAFEDATA_REMOTE_BASE_DIR}/<hostname>_lv_home_<timestamp>.tar.gz'" \
-  | sudo tar -xzp -C /mnt/restore/lv_home/
+  "cat '${SAFEDATA_FULL_REMOTE_BASE_DIR}/<hostname>_lv_home_<timestamp>.tar.gz'" \
+  | sudo tar --extract --gzip --same-owner --same-permissions --numeric-owner \
+      --acls --xattrs --xattrs-include='*' --selinux --sparse \
+      -C /mnt/restore/lv_home/
 ```
 
 ### Backup everything
@@ -132,8 +135,10 @@ ssh -i "${SAFEDATA_SSH_KEY_PATH}" \
   -o "UserKnownHostsFile=${SAFEDATA_SSH_KNOWN_HOSTS_PATH}" \
   -p "${SAFEDATA_SSH_PORT:-22}" \
   "${SAFEDATA_REMOTE_SSH_USER}@${SAFEDATA_REMOTE_SSH_HOST}" \
-  "cat '${SAFEDATA_REMOTE_BASE_DIR}/<hostname>_lv_root_<timestamp>.tar.gz'" \
-  | sudo tar -xzp -C /mnt/restore/lv_root/
+  "cat '${SAFEDATA_FULL_REMOTE_BASE_DIR}/<hostname>_lv_root_<timestamp>.tar.gz'" \
+  | sudo tar --extract --gzip --same-owner --same-permissions --numeric-owner \
+      --acls --xattrs --xattrs-include='*' --selinux --sparse \
+      -C /mnt/restore/lv_root/
 ```
 
 ### Timestamped rsync backup
@@ -156,15 +161,15 @@ ssh -i "${SAFEDATA_SSH_KEY_PATH}" \
   -o "UserKnownHostsFile=${SAFEDATA_SSH_KNOWN_HOSTS_PATH}" \
   -p "${SAFEDATA_SSH_PORT:-22}" \
   "${SAFEDATA_REMOTE_SSH_USER}@${SAFEDATA_REMOTE_SSH_HOST}" \
-  "ls -1d '${SAFEDATA_REMOTE_BASE_DIR}'/lv_home_*"
+  "ls -1d '${SAFEDATA_FULL_REMOTE_BASE_DIR}'/lv_home_*"
 
 # Create a temporary restore directory
 sudo mkdir -p /mnt/restore/lv_home
 
 # Restore the selected timestamped backup
-sudo rsync -al \
+sudo rsync -aHAXS --numeric-ids -M--fake-super \
   -e "ssh -i ${SAFEDATA_SSH_KEY_PATH} -o UserKnownHostsFile=${SAFEDATA_SSH_KNOWN_HOSTS_PATH} -p ${SAFEDATA_SSH_PORT:-22}" \
-  "${SAFEDATA_REMOTE_SSH_USER}@${SAFEDATA_REMOTE_SSH_HOST}:${SAFEDATA_REMOTE_BASE_DIR}/lv_home_<timestamp>/" \
+  "${SAFEDATA_REMOTE_SSH_USER}@${SAFEDATA_REMOTE_SSH_HOST}:${SAFEDATA_FULL_REMOTE_BASE_DIR}/lv_home_<timestamp>/" \
   /mnt/restore/lv_home/
 ```
 
@@ -225,12 +230,12 @@ export SAFEDATA_SSH_KEY_PATH="/path/to/backup_key"
 export SAFEDATA_SSH_KNOWN_HOSTS_PATH="/path/to/known_hosts"
 export SAFEDATA_REMOTE_SSH_USER="backup-user"
 export SAFEDATA_REMOTE_SSH_HOST="backup.example.com"
-export SAFEDATA_REMOTE_BASE_DIR="/remote/backup/safedata"
+export SAFEDATA_FULL_REMOTE_BASE_DIR="/remote/backup/safedata-full-test"
 
 # Optional defaults:
 export SAFEDATA_VG_NAME="vg_main"
 export SAFEDATA_LVM_SNAP_SIZE="80G"
-export SAFEDATA_LOG_FILE="$HOME/.local/share/safedata/logs/activity.log"
+export SAFEDATA_FULL_LOG_FILE="$HOME/.local/share/safedata/logs/full_activity.log"
 export SAFEDATA_SSH_PORT="22"
 export SAFEDATA_SSH_CONNECT_TIMEOUT="10"
 export SAFEDATA_SSH_RETRY_COUNT="6"
@@ -238,11 +243,18 @@ export SAFEDATA_SSH_RETRY_DELAY="15"
 export SAFEDATA_AC_CHECK_INTERVAL="10"
 ```
 
-Required variables are `SAFEDATA_SSH_KEY_PATH`, `SAFEDATA_SSH_KNOWN_HOSTS_PATH`, `SAFEDATA_REMOTE_SSH_USER`, `SAFEDATA_REMOTE_SSH_HOST`, and `SAFEDATA_REMOTE_BASE_DIR`.
+Required variables are `SAFEDATA_SSH_KEY_PATH`,
+`SAFEDATA_SSH_KNOWN_HOSTS_PATH`, `SAFEDATA_REMOTE_SSH_USER`,
+`SAFEDATA_REMOTE_SSH_HOST`, and `SAFEDATA_FULL_REMOTE_BASE_DIR`.
 
-The directory specified by `SAFEDATA_REMOTE_BASE_DIR` must already exist on the
-remote server, and `SAFEDATA_REMOTE_SSH_USER` must have permission to write to
-it. SafeData does not create the remote base directory.
+The directory specified by `SAFEDATA_FULL_REMOTE_BASE_DIR` must be a dedicated
+test location that already exists on the remote server. The SSH user must be
+able to write files and user extended attributes there. SafeData deliberately
+does not fall back to the production `SAFEDATA_REMOTE_BASE_DIR`.
+
+Before every rsync run, SafeData creates and removes a small hidden probe in the
+dedicated target. The backup starts only if the probe confirms that remote
+`--fake-super` metadata can be stored successfully.
 
 ## How LVM Snapshot Works
 
@@ -254,6 +266,23 @@ it. SafeData does not create the remote base directory.
 **Advantage:** System can run normally while snapshot captures the state at a specific moment.
 
 ## Important Notes
+
+### Preserved Metadata
+
+Rsync backups use `-aHAXS --numeric-ids` to preserve standard Unix metadata,
+hard links, ACLs, extended attributes, numeric ownership, and sparse allocation.
+Because the remote SSH user is not expected to be root, `--fake-super` stores
+privileged metadata in `user.rsync.*` extended attributes. The remote filesystem
+must support user xattrs, and restoration must use `-M--fake-super` as shown in
+the examples.
+
+Tar backups store numeric ownership, ACLs, extended attributes, SELinux labels,
+sparse files, and the metadata GNU tar preserves by default, including modes,
+timestamps, symlinks, and hard links.
+
+This is a filesystem-level backup, not a forensic disk image. Filesystem-specific
+flags, inode numbers, creation time, and change time are not guaranteed to be
+preserved.
 
 ### Symlinks
 Script preserves symlinks **as symlinks** (not their content) with original absolute paths. For proper restoration, restore both source directory and symlink targets.
@@ -292,7 +321,7 @@ blocked.
 SafeData appends operational messages to:
 
 ```bash
-$HOME/.local/share/safedata/logs/activity.log
+$HOME/.local/share/safedata/logs/full_activity.log
 ```
 
 The same operational messages are also sent to the systemd journal:
@@ -301,9 +330,9 @@ The same operational messages are also sent to the systemd journal:
 journalctl -t safedata
 ```
 
-The `activity.log` file does not contain the complete `rsync` output required by
-the statistics viewer. To collect statistics, capture each `rsync` backup run in
-a separate timestamped log:
+The `full_activity.log` file does not contain the complete `rsync` output
+required by the statistics viewer. To collect statistics, capture each `rsync`
+backup run in a separate timestamped log:
 
 ```bash
 # Make pipeline failures propagate to the shell

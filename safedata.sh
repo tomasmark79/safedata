@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
 
 # SafeData
-# Universal backup script
-# (c) Tomas Mark 2023-2025
+# Universal full-metadata backup script
+# (c) Tomas Mark 2023-2026
 
 # ============================================
 # CONFIGURATION
 # ============================================
 VG_NAME="${SAFEDATA_VG_NAME:-vg_main}"
 LVM_SNAP_SIZE="${SAFEDATA_LVM_SNAP_SIZE:-80G}"
-LOG_FILE="${SAFEDATA_LOG_FILE:-${HOME}/.local/share/safedata/logs/activity.log}"
+LOG_FILE="${SAFEDATA_FULL_LOG_FILE:-${HOME}/.local/share/safedata/logs/full_activity.log}"
 SSH_KEY_PATH="${SAFEDATA_SSH_KEY_PATH:?Set SAFEDATA_SSH_KEY_PATH}"
 SSH_KNOWN_HOSTS_PATH="${SAFEDATA_SSH_KNOWN_HOSTS_PATH:?Set SAFEDATA_SSH_KNOWN_HOSTS_PATH}"
 SSH_PORT="${SAFEDATA_SSH_PORT:-22}"
 REMOTE_SSH_USER="${SAFEDATA_REMOTE_SSH_USER:?Set SAFEDATA_REMOTE_SSH_USER}"
 REMOTE_SSH_HOST="${SAFEDATA_REMOTE_SSH_HOST:?Set SAFEDATA_REMOTE_SSH_HOST}"
-REMOTE_BASE_DIR="${SAFEDATA_REMOTE_BASE_DIR:?Set SAFEDATA_REMOTE_BASE_DIR}"
+REMOTE_BASE_DIR="${SAFEDATA_FULL_REMOTE_BASE_DIR:?Set SAFEDATA_FULL_REMOTE_BASE_DIR to a dedicated test directory}"
 SSH_CONNECT_TIMEOUT="${SAFEDATA_SSH_CONNECT_TIMEOUT:-10}"
 SSH_RETRY_COUNT="${SAFEDATA_SSH_RETRY_COUNT:-6}"
 SSH_RETRY_DELAY="${SAFEDATA_SSH_RETRY_DELAY:-15}"
 AC_CHECK_INTERVAL="${SAFEDATA_AC_CHECK_INTERVAL:-10}"
 # ============================================
 
-export SAFEDATA_LOG_FILE="${LOG_FILE}"
+export SAFEDATA_FULL_LOG_FILE="${LOG_FILE}"
 
 # Create log directory and file as user before switching to root
 LOG_DIR="$(dirname "${LOG_FILE}")"
@@ -36,7 +36,7 @@ fi
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
   echo "This script must be run as root. Re-running with sudo..."
-  exec sudo --preserve-env=SAFEDATA_VG_NAME,SAFEDATA_LVM_SNAP_SIZE,SAFEDATA_LOG_FILE,SAFEDATA_SSH_KEY_PATH,SAFEDATA_SSH_KNOWN_HOSTS_PATH,SAFEDATA_SSH_PORT,SAFEDATA_REMOTE_SSH_USER,SAFEDATA_REMOTE_SSH_HOST,SAFEDATA_REMOTE_BASE_DIR,SAFEDATA_SSH_CONNECT_TIMEOUT,SAFEDATA_SSH_RETRY_COUNT,SAFEDATA_SSH_RETRY_DELAY,SAFEDATA_AC_CHECK_INTERVAL bash "$0" "$@"
+  exec sudo --preserve-env=SAFEDATA_VG_NAME,SAFEDATA_LVM_SNAP_SIZE,SAFEDATA_FULL_LOG_FILE,SAFEDATA_SSH_KEY_PATH,SAFEDATA_SSH_KNOWN_HOSTS_PATH,SAFEDATA_SSH_PORT,SAFEDATA_REMOTE_SSH_USER,SAFEDATA_REMOTE_SSH_HOST,SAFEDATA_FULL_REMOTE_BASE_DIR,SAFEDATA_SSH_CONNECT_TIMEOUT,SAFEDATA_SSH_RETRY_COUNT,SAFEDATA_SSH_RETRY_DELAY,SAFEDATA_AC_CHECK_INTERVAL bash "$0" "$@"
 fi
 
 # Get the directory of the script
@@ -54,6 +54,20 @@ SSH_OPTIONS=(
   -o "ConnectTimeout=${SSH_CONNECT_TIMEOUT}"
 )
 printf -v SSH_COMMAND '%q ' ssh "${SSH_OPTIONS[@]}"
+
+# Preserve hard links, ACLs, extended attributes, sparse allocation, and numeric
+# ownership. The remote receiver stores privileged metadata in user xattrs so
+# the SSH account does not need root privileges.
+RSYNC_METADATA_ARGS=(
+  -aHAXS
+  --numeric-ids
+  -M--fake-super
+)
+
+# GNU tar stores ordinary permissions, ownership, timestamps, symlinks, and
+# hard links by default. These options add extended filesystem metadata and
+# preserve sparse files efficiently.
+TAR_METADATA_ARGS="--numeric-owner --acls --xattrs --xattrs-include='*' --selinux --sparse"
 
 # Initialize variables for cleanup trap
 MNT_DIR=""
@@ -139,6 +153,71 @@ check_ssh_connection() {
   exit 1
 }
 
+# Refuse to start unless the dedicated remote target already exists and is
+# writable. Keeping experimental backups separate protects production data.
+check_remote_target() {
+  local quoted_remote_dir
+  printf -v quoted_remote_dir '%q' "${REMOTE_BASE_DIR}"
+
+  # Expansion is intentionally local; %q above makes the remote path shell-safe.
+  # shellcheck disable=SC2029
+  if ! ssh "${SSH_OPTIONS[@]}" \
+       "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}" \
+       "test -d ${quoted_remote_dir} && test -w ${quoted_remote_dir}"; then
+    echo "ERROR: Full-metadata backup target does not exist or is not writable: ${REMOTE_BASE_DIR}"
+    echo "Create a dedicated test directory and set SAFEDATA_FULL_REMOTE_BASE_DIR to it."
+    exit 1
+  fi
+}
+
+# Exercise rsync's remote --fake-super support before transferring real data.
+# A successful probe confirms that the remote filesystem accepts the special
+# user.rsync.* xattrs used to encode privileged metadata.
+check_remote_fake_super_support() {
+  if [[ "${BACKUP_METHOD}" != "rsync" && \
+        "${BACKUP_METHOD}" != "rsync_notimestamp" && \
+        "${BACKUP_METHOD}" != "folder_rsync" ]]; then
+    return 0
+  fi
+
+  local probe_dir
+  local probe_name
+  local remote_probe
+  local quoted_remote_probe
+
+  probe_dir=$(mktemp -d)
+  probe_name=".safedata_fake_super_probe_$(hostname)_$$"
+  remote_probe="${REMOTE_BASE_DIR}/${probe_name}"
+  printf -v quoted_remote_probe '%q' "${remote_probe}"
+
+  printf 'SafeData fake-super probe\n' > "${probe_dir}/probe"
+  chmod 000 "${probe_dir}/probe"
+
+  if ! rsync -aX --numeric-ids -M--fake-super \
+       -e "${SSH_COMMAND}" \
+       "${probe_dir}/" \
+       "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}:${remote_probe}/"; then
+    chmod 600 "${probe_dir}/probe"
+    rm -f "${probe_dir}/probe"
+    rmdir "${probe_dir}"
+    # Expansion is intentionally local; %q above makes the probe path shell-safe.
+    # shellcheck disable=SC2029
+    ssh "${SSH_OPTIONS[@]}" "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}" \
+      "rm -f ${quoted_remote_probe}/probe; rmdir ${quoted_remote_probe}" 2>/dev/null || true
+    echo "ERROR: Remote target does not support rsync --fake-super metadata."
+    echo "Use a filesystem with writable user extended attributes."
+    exit 1
+  fi
+
+  chmod 600 "${probe_dir}/probe"
+  rm -f "${probe_dir}/probe"
+  rmdir "${probe_dir}"
+  # Expansion is intentionally local; %q above makes the probe path shell-safe.
+  # shellcheck disable=SC2029
+  ssh "${SSH_OPTIONS[@]}" "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}" \
+    "rm -f ${quoted_remote_probe}/probe && rmdir ${quoted_remote_probe}"
+}
+
 # Usage
 usage() {
   cat << EOF
@@ -157,11 +236,20 @@ RULES_FILE:
     - Backup EVERYTHING (no filters applied)
 
 BACKUP_METHOD:
-  rsync              - Rsync with timestamp (creates new backup each time)
-  rsync_notimestamp  - Rsync without timestamp (overwrites previous backup)
-  tar                - Tar archive with timestamp
-  folder_rsync       - Rsync without LVM snapshot (for regular directories)
-  folder_tar         - Tar without LVM snapshot (for regular directories)
+  rsync              - Full-metadata rsync with timestamp
+  rsync_notimestamp  - Full-metadata rsync into a stable directory
+  tar                - Full-metadata tar archive with timestamp
+  folder_rsync       - Full-metadata rsync without LVM snapshot
+  folder_tar         - Full-metadata tar without LVM snapshot
+
+METADATA:
+  rsync preserves hard links, ACLs, xattrs, sparse files, and numeric IDs.
+  Privileged remote metadata is stored with rsync --fake-super.
+  tar preserves numeric IDs, ACLs, xattrs, SELinux metadata, and sparse files.
+
+REMOTE TARGET:
+  SAFEDATA_FULL_REMOTE_BASE_DIR must point to a dedicated, existing, writable
+  directory. Do not use the production backup directory while testing.
 
 VOLUME:
   - LVM volume name (e.g., lv_home, lv_var) for snapshot-based backups
@@ -191,6 +279,15 @@ BACKUP_METHOD="$2"
 shift 2
 VOLUMES=("$@")
 
+case "${BACKUP_METHOD}" in
+  rsync|rsync_notimestamp|tar|folder_rsync|folder_tar)
+    ;;
+  *)
+    echo "ERROR: Unsupported backup method: ${BACKUP_METHOD}"
+    usage
+    ;;
+esac
+
 # Check required dependencies based on backup method
 BASE_DEPS=(ssh)
 LVM_DEPS=(lvcreate lvremove lvdisplay mount umount)
@@ -211,6 +308,8 @@ fi
 check_dependencies "${BASE_DEPS[@]}"
 abort_if_on_battery
 check_ssh_connection
+check_remote_target
+check_remote_fake_super_support
 
 # Determine rules mode and file path
 # Support both absolute and relative paths
@@ -464,7 +563,7 @@ build_tar_args() {
   fi
 }
 
-log "==================== Starting SafeData Backup ===================="
+log "================ Starting SafeData Full-Metadata Backup ================"
 
 # Start time measurement
 START_TIME=$(date +%s)
@@ -506,7 +605,7 @@ for VOL in "${VOLUMES[@]}"; do
         DIR_NAME="root"
       fi
       
-      if run_shell_with_ac_monitor "tar backup for folder ${SRC_DIR}" "tar cpz -C \"${SRC_DIR}\" ${TAR_ARGS} | ${SSH_COMMAND}\"${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}\" \"cat > ${REMOTE_BASE_DIR}/$(hostname)_${DIR_NAME}_${TIMESTAMP}.tar.gz\""; then
+      if run_shell_with_ac_monitor "tar backup for folder ${SRC_DIR}" "tar --create --gzip ${TAR_METADATA_ARGS} -C \"${SRC_DIR}\" ${TAR_ARGS} | ${SSH_COMMAND}\"${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}\" \"cat > ${REMOTE_BASE_DIR}/$(hostname)_${DIR_NAME}_${TIMESTAMP}.tar.gz\""; then
         log "Tar backup completed successfully for folder ${SRC_DIR}"
       else
         log "ERROR: Tar backup failed for folder ${SRC_DIR}"
@@ -525,7 +624,7 @@ for VOL in "${VOLUMES[@]}"; do
         DIR_NAME="root"
       fi
       
-      if run_with_ac_monitor "rsync backup for folder ${SRC_DIR}" rsync -al "${RSYNC_ARGS[@]}" -e "${SSH_COMMAND}" -v "${SRC_DIR}/" "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}:${REMOTE_BASE_DIR}/${DIR_NAME}/"; then
+      if run_with_ac_monitor "rsync backup for folder ${SRC_DIR}" rsync "${RSYNC_METADATA_ARGS[@]}" "${RSYNC_ARGS[@]}" -e "${SSH_COMMAND}" -v "${SRC_DIR}/" "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}:${REMOTE_BASE_DIR}/${DIR_NAME}/"; then
         log "Rsync backup completed successfully for folder ${SRC_DIR}"
       else
         log "ERROR: Rsync backup failed for folder ${SRC_DIR}"
@@ -562,7 +661,7 @@ for VOL in "${VOLUMES[@]}"; do
     
     echo "TAR_ARGS: ${TAR_ARGS}"
     
-    if run_shell_with_ac_monitor "tar backup for ${VOL}" "tar cpz -C \"${MNT_DIR}\" ${TAR_ARGS} | ${SSH_COMMAND}\"${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}\" \"cat > ${REMOTE_BASE_DIR}/$(hostname)_${VOL}_${TIMESTAMP}.tar.gz\""; then
+    if run_shell_with_ac_monitor "tar backup for ${VOL}" "tar --create --gzip ${TAR_METADATA_ARGS} -C \"${MNT_DIR}\" ${TAR_ARGS} | ${SSH_COMMAND}\"${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}\" \"cat > ${REMOTE_BASE_DIR}/$(hostname)_${VOL}_${TIMESTAMP}.tar.gz\""; then
       log "Tar backup completed successfully for ${VOL}"
     else
       log "ERROR: Tar backup failed for ${VOL}"
@@ -576,7 +675,7 @@ for VOL in "${VOLUMES[@]}"; do
     build_rsync_args "${RULES_MODE}" "${RULES_PATH}"
     printf 'RSYNC_ARGS:'; printf ' %q' "${RSYNC_ARGS[@]}"; printf '\n'
     
-    if run_with_ac_monitor "rsync_notimestamp for ${VOL}" rsync -al "${RSYNC_ARGS[@]}" -e "${SSH_COMMAND}" -v "${MNT_DIR}/" "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}:${REMOTE_BASE_DIR}/${VOL}/"; then
+    if run_with_ac_monitor "rsync_notimestamp for ${VOL}" rsync "${RSYNC_METADATA_ARGS[@]}" "${RSYNC_ARGS[@]}" -e "${SSH_COMMAND}" -v "${MNT_DIR}/" "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}:${REMOTE_BASE_DIR}/${VOL}/"; then
       log "Rsync_notimestamp backup completed successfully for ${VOL}"
     else
       log "ERROR: Rsync_notimestamp backup failed for ${VOL}"
@@ -590,7 +689,7 @@ for VOL in "${VOLUMES[@]}"; do
     build_rsync_args "${RULES_MODE}" "${RULES_PATH}"
     printf 'RSYNC_ARGS:'; printf ' %q' "${RSYNC_ARGS[@]}"; printf '\n'
     
-    if run_with_ac_monitor "rsync backup for ${VOL}" rsync -al "${RSYNC_ARGS[@]}" -e "${SSH_COMMAND}" -v "${MNT_DIR}/" "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}:${REMOTE_BASE_DIR}/${VOL}_${TIMESTAMP}/"; then
+    if run_with_ac_monitor "rsync backup for ${VOL}" rsync "${RSYNC_METADATA_ARGS[@]}" "${RSYNC_ARGS[@]}" -e "${SSH_COMMAND}" -v "${MNT_DIR}/" "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}:${REMOTE_BASE_DIR}/${VOL}_${TIMESTAMP}/"; then
       log "Rsync backup completed successfully for ${VOL}"
     else
       log "ERROR: Rsync backup failed for ${VOL}"
@@ -621,5 +720,5 @@ else
   TIME_MSG=$(printf "%ds" $SECONDS)
 fi
 
-log "All backups completed successfully (elapsed time: ${TIME_MSG})"
-echo "All backups completed successfully (elapsed time: ${TIME_MSG})"
+log "All full-metadata backups completed successfully (elapsed time: ${TIME_MSG})"
+echo "All full-metadata backups completed successfully (elapsed time: ${TIME_MSG})"
