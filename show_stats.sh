@@ -10,15 +10,18 @@
 #   ./show_stats.sh 6         - Show summary statistics
 #
 # Environment variables:
-#   LOGS_DIR     - Directory with log files (default: ~/.local/share/safedata/logs)
-#   STATS_FILE   - CSV file for statistics (default: $LOGS_DIR/stats.csv)
+#   SAFEDATA_LOG_FILE - Cesta k activity.log; statistiky použijí jeho adresář.
+#   LOGS_DIR     - Volitelné přepsání adresáře s logy.
+#                  Výchozí adresář: ~/.local/share/logs/safedata
+#   STATS_FILE   - CSV se statistikami (výchozí: $LOGS_DIR/stats.csv)
 #   UCHART       - Path to uchart.py (default: same directory as this script)
 #
 # Credits:
 #   uchart (MIT License) by Danlino: https://github.com/Danlino/uchart
 #
 
-LOGS_DIR="${LOGS_DIR:-$HOME/.local/share/safedata/logs}"
+LOG_FILE="${SAFEDATA_LOG_FILE:-${HOME}/.local/share/logs/safedata/activity.log}"
+LOGS_DIR="${LOGS_DIR:-$(dirname "$LOG_FILE")}"
 STATS_FILE="${STATS_FILE:-$LOGS_DIR/stats.csv}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UCHART="${UCHART:-$SCRIPT_DIR/uchart/uchart.py}"

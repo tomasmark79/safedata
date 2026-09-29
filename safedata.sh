@@ -9,7 +9,7 @@
 # ============================================
 VG_NAME="${SAFEDATA_VG_NAME:-vg_main}"
 LVM_SNAP_SIZE="${SAFEDATA_LVM_SNAP_SIZE:-80G}"
-LOG_FILE="${SAFEDATA_LOG_FILE:-${HOME}/.local/share/safedata/logs/activity.log}"
+LOG_FILE="${SAFEDATA_LOG_FILE:-${HOME}/.local/share/logs/safedata/activity.log}"
 SSH_KEY_PATH="${SAFEDATA_SSH_KEY_PATH:?Set SAFEDATA_SSH_KEY_PATH}"
 SSH_KNOWN_HOSTS_PATH="${SAFEDATA_SSH_KNOWN_HOSTS_PATH:?Set SAFEDATA_SSH_KNOWN_HOSTS_PATH}"
 SSH_PORT="${SAFEDATA_SSH_PORT:-22}"

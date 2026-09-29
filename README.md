@@ -235,7 +235,7 @@ export SAFEDATA_REMOTE_BASE_DIR="/remote/backup/safedata"
 # Optional defaults:
 export SAFEDATA_VG_NAME="vg_main"
 export SAFEDATA_LVM_SNAP_SIZE="80G"
-export SAFEDATA_LOG_FILE="$HOME/.local/share/safedata/logs/activity.log"
+export SAFEDATA_LOG_FILE="$HOME/.local/share/logs/safedata/activity.log"
 export SAFEDATA_SSH_PORT="22"
 export SAFEDATA_SSH_CONNECT_TIMEOUT="10"
 export SAFEDATA_SSH_RETRY_COUNT="6"
@@ -320,7 +320,7 @@ blocked.
 SafeData appends operational messages to:
 
 ```bash
-$HOME/.local/share/safedata/logs/activity.log
+$HOME/.local/share/logs/safedata/activity.log
 ```
 
 The same operational messages are also sent to the systemd journal:
@@ -338,10 +338,10 @@ a separate timestamped log:
 set -o pipefail
 
 # Create the directory used by the statistics viewer
-mkdir -p "$HOME/.local/share/safedata/logs"
+mkdir -p "$HOME/.local/share/logs/safedata"
 
 # Capture one complete rsync backup run in a compatible log file
-backup_log="$HOME/.local/share/safedata/logs/safedata_$(date +%F_%H-%M-%S).log"
+backup_log="$HOME/.local/share/logs/safedata/safedata_$(date +%F_%H-%M-%S).log"
 ./safedata.sh all.rules rsync lv_home 2>&1 | tee "$backup_log"
 ```
 
@@ -432,11 +432,16 @@ From each compatible `rsync` log, the script extracts:
 Extracted data is stored in CSV format at:
 
 ```
-~/.local/share/safedata/logs/stats.csv
+~/.local/share/logs/safedata/stats.csv
 ```
 
-The script automatically updates the CSV file when it finds a newer compatible
-log.
+Statistiky používají adresář souboru `SAFEDATA_LOG_FILE`, stejně jako zálohování.
+Bez této proměnné je výchozí adresář `$HOME/.local/share/logs/safedata`.
+Proměnnou nastavte ve stejném prostředí také při spuštění `safedata-stats` nebo
+`show_stats.sh`; nastavení služby systemd se do terminálu nepřenáší.
+`LOGS_DIR` může výslovně přepsat adresář pro čtení logů a `STATS_FILE` cestu
+výsledného CSV. Bez těchto voleb se `stats.csv` ukládá vedle logů.
+Skript CSV automaticky aktualizuje, když najde novější odpovídající log.
 
 ### Requirements
 
