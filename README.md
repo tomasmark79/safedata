@@ -257,12 +257,40 @@ configured target. The backup starts only if the probe confirms that remote
 
 ## How LVM Snapshot Works
 
-1. Script creates LVM volume snapshot
-2. Mounts snapshot to `/mnt/snap_*`
+1. Script locks the selected VG/LV and creates an uniquely named LVM snapshot
+2. Mounts snapshot to a private temporary directory under `/mnt/safedata.*`
 3. Backs up data from snapshot (consistent point-in-time)
 4. Unmounts and removes snapshot
 
 **Advantage:** System can run normally while snapshot captures the state at a specific moment.
+
+## Bezpečné dokončení a ověření
+
+Zámek platí pro konkrétní VG/LV po dobu běhu. Úklid pracuje pouze se snapshotem
+a připojením, které tento proces skutečně vytvořil. Pokud odpojení selže,
+snapshot se neodstraňuje a běh skončí chybou. Zpráva o dokončení vznikne až po
+úspěšném úklidu. Zbylý snapshot či připojení po chybě vyžadují kontrolu správce.
+
+Při `HUP`, `INT`, `TERM` i neočekávaném ukončení se nejprve zastaví skupina
+procesů přenosu a teprve potom začne úklid snapshotu. `SIGKILL` ani výpadek
+napájení úklid provést neumožňují.
+
+TAR přenos zapisuje do jedinečného souboru s příponou `.tar.gz.partial`.
+Teprve úspěšné dokončení taru i SSH dovolí přejmenování na `.tar.gz`.
+Neúplný soubor zůstává označený `.partial`; takový soubor není hotová záloha.
+Název archivu za časem obsahuje také identifikátor běhu, aby se nepřepsal jiný
+archiv vytvořený ve stejné sekundě. Obsah pravidel se předává jako argumenty,
+nikoli jako shellový kód; názvy obsahující mezery proto fungují beze změny významu.
+
+Balíček spouští regrese při sestavení. Testy používají pouze dočasné soubory,
+náhrady SSH/LVM příkazů a vlastní pomocné procesy:
+
+```bash
+python3 -B -m unittest discover -s tests -v
+nix flake check --no-update-lock-file
+```
+
+Testy nepotvrzují dostupnost konkrétního NAS ani obnovitelnost existující zálohy.
 
 ## Important Notes
 

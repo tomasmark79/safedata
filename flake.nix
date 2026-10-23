@@ -27,10 +27,31 @@
         {
           default = pkgs.stdenvNoCC.mkDerivation {
             pname = "safedata";
-            version = "0.1.0";
+            version = "0.1.1";
             src = self;
 
             nativeBuildInputs = [ pkgs.makeWrapper ];
+
+            # Regrese používají jen dočasná data a náhrady LVM a SSH příkazů.
+            nativeCheckInputs = with pkgs; [
+              python3
+              bash
+              coreutils
+              findutils
+              gnugrep
+              gnused
+              gawk
+              gnutar
+              gzip
+              rsync
+              util-linux
+            ];
+            doCheck = true;
+            checkPhase = ''
+              runHook preCheck
+              python3 -B -m unittest discover -s tests -v
+              runHook postCheck
+            '';
 
             installPhase = ''
               runHook preInstall
@@ -75,6 +96,10 @@
           };
         }
       );
+
+      checks = forAllSystems (system: {
+        default = self.packages.${system}.default;
+      });
 
       apps = forAllSystems (system: {
         default = {

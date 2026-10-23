@@ -67,13 +67,20 @@ RSYNC_METADATA_ARGS=(
 # GNU tar stores ordinary permissions, ownership, timestamps, symlinks, and
 # hard links by default. These options add extended filesystem metadata and
 # preserve sparse files efficiently.
-TAR_METADATA_ARGS="--numeric-owner --acls --xattrs --xattrs-include='*' --selinux --sparse"
+TAR_METADATA_ARGS=(--numeric-owner --acls --xattrs '--xattrs-include=*' --selinux --sparse)
 
-# Initialize variables for cleanup trap
+# Stav patří pouze tomuto běhu; cizí snapshot se podle existence nemaže.
 MNT_DIR=""
 SNAP_NAME=""
 SNAP_DEV=""
 BACKUP_PID=""
+SNAP_CREATED=0
+SNAP_MOUNTED=0
+MNT_DIR_CREATED=0
+SNAP_LOCK_FD=""
+SNAP_LOCK_ROOT="/run/safedata/locks"
+LIFECYCLE_CRITICAL=0
+PENDING_SIGNAL=""
 
 check_dependencies() {
   local -a required_cmds=("$@")
@@ -153,12 +160,19 @@ check_ssh_connection() {
   exit 1
 }
 
+# NAS může používat POSIX sh; Bashové printf %q není pro něj obecně přenositelné.
+quote_remote_path() {
+  local value="$1"
+  value="${value//\'/\'\"\'\"\'}"
+  printf "'%s'" "$value"
+}
+
 # Refuse to start unless the configured remote target exists and is writable.
 check_remote_target() {
   local quoted_remote_dir
-  printf -v quoted_remote_dir '%q' "${REMOTE_BASE_DIR}"
+  quoted_remote_dir=$(quote_remote_path "${REMOTE_BASE_DIR}")
 
-  # Expansion is intentionally local; %q above makes the remote path shell-safe.
+  # Cesta je citována pro POSIX shell vzdáleného NASu.
   # shellcheck disable=SC2029
   if ! ssh "${SSH_OPTIONS[@]}" \
        "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}" \
@@ -187,7 +201,7 @@ check_remote_fake_super_support() {
   probe_dir=$(mktemp -d)
   probe_name=".safedata_fake_super_probe_$(hostname)_$$"
   remote_probe="${REMOTE_BASE_DIR}/${probe_name}"
-  printf -v quoted_remote_probe '%q' "${remote_probe}"
+  quoted_remote_probe=$(quote_remote_path "${remote_probe}")
 
   printf 'SafeData fake-super probe\n' > "${probe_dir}/probe"
   chmod 000 "${probe_dir}/probe"
@@ -199,7 +213,7 @@ check_remote_fake_super_support() {
     chmod 600 "${probe_dir}/probe"
     rm -f "${probe_dir}/probe"
     rmdir "${probe_dir}"
-    # Expansion is intentionally local; %q above makes the probe path shell-safe.
+    # Cesta je citována pro POSIX shell vzdáleného NASu.
     # shellcheck disable=SC2029
     ssh "${SSH_OPTIONS[@]}" "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}" \
       "rm -f ${quoted_remote_probe}/probe; rmdir ${quoted_remote_probe}" 2>/dev/null || true
@@ -211,7 +225,7 @@ check_remote_fake_super_support() {
   chmod 600 "${probe_dir}/probe"
   rm -f "${probe_dir}/probe"
   rmdir "${probe_dir}"
-  # Expansion is intentionally local; %q above makes the probe path shell-safe.
+  # Cesta je citována pro POSIX shell vzdáleného NASu.
   # shellcheck disable=SC2029
   ssh "${SSH_OPTIONS[@]}" "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}" \
     "rm -f ${quoted_remote_probe}/probe && rmdir ${quoted_remote_probe}"
@@ -288,7 +302,7 @@ esac
 
 # Check required dependencies based on backup method
 BASE_DEPS=(ssh)
-LVM_DEPS=(lvcreate lvremove lvdisplay mount umount)
+LVM_DEPS=(lvcreate lvremove mount umount mountpoint flock)
 BASE_DEPS+=(setsid)
 
 if [[ "${BACKUP_METHOD}" == "rsync" || "${BACKUP_METHOD}" == "rsync_notimestamp" || "${BACKUP_METHOD}" == "folder_rsync" ]]; then
@@ -333,21 +347,153 @@ log() {
   echo "$(date +"%Y-%m-%d %H:%M:%S") : ${MESSAGE}" | tee -a "${LOG_FILE}" | logger -t safedata
 }
 
-cleanup() {
-  # Only cleanup if variables are set (to avoid issues when called by trap at script end)
-  if [ -n "${MNT_DIR}" ] && mountpoint -q "${MNT_DIR}" 2>/dev/null; then
+finish_critical_section() {
+  LIFECYCLE_CRITICAL=0
+  if [ -n "${PENDING_SIGNAL}" ]; then
+    local signal="${PENDING_SIGNAL}"
+    PENDING_SIGNAL=""
+    handle_signal "${signal}"
+  fi
+}
+
+prepare_snapshot() {
+  local volume="$1"
+  local timestamp="$2"
+  local status
+
+  # Názvy VG/LV nesmějí změnit cestu k zámku.
+  if [[ ! "${VG_NAME}" =~ ^[a-zA-Z0-9_+.][a-zA-Z0-9_+.-]*$ ]] \
+    || [[ ! "${volume}" =~ ^[a-zA-Z0-9_+.][a-zA-Z0-9_+.-]*$ ]] \
+    || [[ "${VG_NAME}" == "." || "${VG_NAME}" == ".." || "${volume}" == "." || "${volume}" == ".." ]]; then
+    log "ERROR: Invalid volume group or logical volume name"
+    return 1
+  fi
+
+  if [ -n "${SNAP_LOCK_FD}" ] || [ "${SNAP_CREATED}" -ne 0 ] || [ "${MNT_DIR_CREATED}" -ne 0 ]; then
+    log "ERROR: Previous snapshot cleanup is incomplete"
+    return 1
+  fi
+
+  if ! (umask 077; mkdir -p "${SNAP_LOCK_ROOT}/${VG_NAME}"); then
+    return 1
+  fi
+  LIFECYCLE_CRITICAL=1
+  if exec {SNAP_LOCK_FD}>"${SNAP_LOCK_ROOT}/${VG_NAME}/${volume}.lock"; then
+    status=0
+  else
+    status=$?
+  fi
+  finish_critical_section
+  if [ "${status}" -ne 0 ]; then
+    return "${status}"
+  fi
+  if ! flock -n "${SNAP_LOCK_FD}"; then
+    log "ERROR: Another backup already owns ${VG_NAME}/${volume}"
+    exec {SNAP_LOCK_FD}>&-
+    SNAP_LOCK_FD=""
+    return 1
+  fi
+
+  # Krátký název nezávisí na délce LV; případnou kolizi lvcreate bezpečně odmítne.
+  SNAP_NAME="safedata_${timestamp}_$$_${RANDOM}_${RANDOM}"
+  SNAP_DEV="/dev/${VG_NAME}/${SNAP_NAME}"
+  ORIG_DEV="/dev/${VG_NAME}/${volume}"
+
+  LIFECYCLE_CRITICAL=1
+  if MNT_DIR=$(mktemp -d /mnt/safedata.XXXXXXXXXX); then
+    MNT_DIR_CREATED=1
+    status=0
+  else
+    status=$?
+  fi
+  finish_critical_section
+  if [ "${status}" -ne 0 ]; then
+    return "${status}"
+  fi
+
+  log "Creating snapshot for ${volume}"
+  # Signál se zpracuje až po zaznamenání výsledku, aby mezi lvcreate a evidencí
+  # vlastnictví nevzniklo okno, v němž by dokončený snapshot zůstal bez úklidu.
+  LIFECYCLE_CRITICAL=1
+  if lvcreate -L "${LVM_SNAP_SIZE}" -s -n "${SNAP_NAME}" "${ORIG_DEV}"; then
+    SNAP_CREATED=1
+    status=0
+  else
+    status=$?
+  fi
+  finish_critical_section
+  if [ "${status}" -ne 0 ]; then
+    log "ERROR: Failed to create snapshot for ${volume}"
+    return "${status}"
+  fi
+
+  log "Mounting snapshot ${SNAP_NAME}"
+  LIFECYCLE_CRITICAL=1
+  if mount "${SNAP_DEV}" "${MNT_DIR}"; then
+    SNAP_MOUNTED=1
+    status=0
+  else
+    status=$?
+  fi
+  finish_critical_section
+  if [ "${status}" -ne 0 ]; then
+    log "ERROR: Failed to mount snapshot ${SNAP_NAME}"
+    return "${status}"
+  fi
+}
+
+cleanup_owned_resources() {
+  # Při chybě zůstanou příznaky i zámek zachované pro další pokus a diagnostiku.
+  # I neúspěšný mount helper mohl svazek připojit. Kontrolujeme jen adresář,
+  # který tento běh sám vytvořil a dosud vlastní.
+  if [ "${MNT_DIR_CREATED}" -eq 1 ] && mountpoint -q "${MNT_DIR}"; then
+    SNAP_MOUNTED=1
+  fi
+  if [ "${SNAP_MOUNTED}" -eq 1 ]; then
     log "Unmounting snapshot ${SNAP_NAME}"
-    umount "${MNT_DIR}" || log "Failed to unmount snapshot ${SNAP_NAME}"
+    if ! umount "${MNT_DIR}"; then
+      log "ERROR: Failed to unmount snapshot ${SNAP_NAME}; keeping snapshot and lock"
+      return 1
+    fi
+    SNAP_MOUNTED=0
   fi
 
-  if [ -n "${SNAP_DEV}" ] && lvdisplay "${SNAP_DEV}" &>/dev/null; then
+  if [ "${SNAP_CREATED}" -eq 1 ]; then
     log "Removing snapshot ${SNAP_NAME}"
-    lvremove -y "${SNAP_DEV}" || log "Failed to remove snapshot ${SNAP_NAME}"
+    if ! lvremove -y "${SNAP_DEV}"; then
+      log "ERROR: Failed to remove snapshot ${SNAP_NAME}; keeping lock"
+      return 1
+    fi
+    SNAP_CREATED=0
   fi
 
-  if [ -n "${MNT_DIR}" ]; then
-    rmdir "${MNT_DIR}" 2>/dev/null || true
+  if [ "${MNT_DIR_CREATED}" -eq 1 ]; then
+    if ! rmdir "${MNT_DIR}"; then
+      log "ERROR: Failed to remove owned mount directory ${MNT_DIR}"
+      return 1
+    fi
+    MNT_DIR_CREATED=0
+    MNT_DIR=""
   fi
+
+  if [ -n "${SNAP_LOCK_FD}" ]; then
+    exec {SNAP_LOCK_FD}>&-
+    SNAP_LOCK_FD=""
+  fi
+  SNAP_NAME=""
+  SNAP_DEV=""
+}
+
+cleanup() {
+  local status
+  LIFECYCLE_CRITICAL=1
+  if cleanup_owned_resources; then
+    status=0
+  else
+    status=$?
+  fi
+  finish_critical_section
+  return "${status}"
 }
 
 terminate_backup() {
@@ -355,31 +501,53 @@ terminate_backup() {
     return 0
   fi
 
-  if kill -0 "${BACKUP_PID}" 2>/dev/null; then
-    kill -TERM "-${BACKUP_PID}" 2>/dev/null || true
-    sleep 2
-    kill -KILL "-${BACKUP_PID}" 2>/dev/null || true
-    wait "${BACKUP_PID}" 2>/dev/null || true
-  fi
-
+  # Skupinu ukončíme i tehdy, když její vedoucí proces už skončil, ale jeho
+  # potomci stále čtou snapshot nebo přenášejí data.
+  local attempt
+  kill -TERM -- "-${BACKUP_PID}" 2>/dev/null || true
+  for attempt in {1..20}; do
+    if ! kill -0 -- "-${BACKUP_PID}" 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
+  kill -KILL -- "-${BACKUP_PID}" 2>/dev/null || true
+  wait "${BACKUP_PID}" 2>/dev/null || true
   BACKUP_PID=""
+}
+
+finalize() {
+  local status="$1"
+  trap - EXIT
+  trap '' HUP INT TERM
+  terminate_backup
+  if ! cleanup; then
+    if [ "${status}" -eq 0 ]; then
+      status=1
+    fi
+    log "ERROR: Snapshot cleanup incomplete; inspect ${SNAP_DEV:-mount directory} ${MNT_DIR}"
+  fi
+  exit "${status}"
 }
 
 handle_signal() {
   local signal="$1"
-  local exit_code=143
-
-  if [ "${signal}" = "INT" ]; then
-    exit_code=130
+  local exit_code
+  if [ "${LIFECYCLE_CRITICAL}" -eq 1 ]; then
+    PENDING_SIGNAL="${signal}"
+    return 0
   fi
-
-  trap - INT TERM
+  case "${signal}" in
+    HUP) exit_code=129 ;;
+    INT) exit_code=130 ;;
+    *) exit_code=143 ;;
+  esac
   log "Interrupted by ${signal}; stopping backup"
-  terminate_backup
   exit "${exit_code}"
 }
 
-trap cleanup EXIT
+trap 'finalize "$?"' EXIT
+trap 'handle_signal HUP' HUP
 trap 'handle_signal INT' INT
 trap 'handle_signal TERM' TERM
 
@@ -389,9 +557,11 @@ run_with_ac_monitor() {
   local backup_pid
   local status
 
+  LIFECYCLE_CRITICAL=1
   setsid "$@" &
-  backup_pid=$!
-  BACKUP_PID="${backup_pid}"
+  BACKUP_PID=$!
+  backup_pid="${BACKUP_PID}"
+  finish_critical_section
 
   while kill -0 "${backup_pid}" 2>/dev/null; do
     if ! is_on_ac_power; then
@@ -403,38 +573,12 @@ run_with_ac_monitor() {
     sleep "${AC_CHECK_INTERVAL}"
   done
 
-  wait "${backup_pid}"
-  status=$?
-  BACKUP_PID=""
-  return "${status}"
-}
-
-run_shell_with_ac_monitor() {
-  local description="$1"
-  local command="$2"
-  local err_log
-  local status
-
-  err_log=$(mktemp)
-
-  run_with_ac_monitor "${description}" bash -o pipefail -c "${command}" 2> >(tee "${err_log}" >&2)
-  status=$?
-
-  if [ "${status}" -eq 0 ]; then
-    rm -f "${err_log}"
-    return 0
+  if wait "${backup_pid}"; then
+    status=0
+  else
+    status=$?
   fi
-
-  log "ERROR: ${description} exited with status ${status}"
-
-  if [ -s "${err_log}" ]; then
-    log "Last stderr lines from ${description}:"
-    tail -n 20 "${err_log}" | while IFS= read -r line; do
-      log "  ${line}"
-    done
-  fi
-
-  rm -f "${err_log}"
+  terminate_backup
   return "${status}"
 }
 
@@ -482,7 +626,7 @@ build_rsync_args() {
       if [[ "$line" == */* ]]; then
         local parent
         parent=$(dirname "$line")
-        while [[ "$parent" != "." ]]; do
+        while [[ "$parent" != "." && "$parent" != "/" ]]; do
           parent_dirs["$parent/"]=1
           parent=$(dirname "$parent")
         done
@@ -511,54 +655,90 @@ build_rsync_args() {
   fi
 }
 
-# Function to build tar arguments based on rules mode
+# Pravidla jsou jednotlivé argumenty; jejich obsah nikdy nevyhodnocuje shell.
+TAR_ARGS=()
 build_tar_args() {
   local mode="$1"
   local rules_file="$2"
+  local line
+  TAR_ARGS=()
   
   if [ "$mode" == "all" ]; then
-    # ALL mode - backup everything (use .)
-    echo "."
+    TAR_ARGS=(-- .)
     return 0
   elif [ "$mode" == "exclude" ]; then
-    # EXCLUDE mode - preserve leading slash to anchor patterns
-    # /dev means only in root (use ./dev for tar), dev means anywhere
-    local excludes=""
     while IFS= read -r line || [[ -n "$line" ]]; do
       [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-      line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+      line=$(printf '%s\n' "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+      [[ -z "$line" ]] && continue
       
       if [[ "$line" =~ ^/ ]]; then
-        # Leading slash - anchor to root (prefix with ./ for tar)
-        line="${line#/}"
-        excludes="${excludes} --exclude=./${line}"
+        # Úvodní lomítko ukotví vzor ke kořeni archivu, jinak platí všude.
+        TAR_ARGS+=("--exclude=./${line#/}")
       else
-        # No leading slash - match anywhere
-        excludes="${excludes} --exclude=${line}"
+        TAR_ARGS+=("--exclude=${line}")
       fi
     done < "$rules_file"
-    
-    if [ -n "$excludes" ]; then
-      echo "$excludes ."
-    else
-      echo "."
-    fi
+    TAR_ARGS+=(-- .)
   else
-    # INCLUDE mode
-    local include_items=""
+    local -a include_items=()
     while IFS= read -r line || [[ -n "$line" ]]; do
       [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-      line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s|^/||')
-      include_items="${include_items} ./${line}"
+      line=$(printf '%s\n' "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s|^/||')
+      [[ -z "$line" ]] && continue
+      include_items+=("./${line}")
     done < "$rules_file"
     
-    if [ -z "$include_items" ]; then
+    if [ "${#include_items[@]}" -eq 0 ]; then
       echo "ERROR: No items to include in tar backup"
       return 1
     fi
-    
-    echo "$include_items"
+    TAR_ARGS=(-- "${include_items[@]}")
   fi
+}
+
+run_tar_with_ac_monitor() {
+  local label="$1"
+  local source_dir="$2"
+  # Unikátní jméno chrání i hotové archivy dvou záloh spuštěných v téže sekundě.
+  local archive_path="${3%.tar.gz}_${BASHPID}_${RANDOM}_${RANDOM}_${RANDOM}_${RANDOM}.tar.gz"
+  local partial_path="${archive_path}.partial"
+  local quoted_partial quoted_archive write_command finish_command
+  quoted_partial=$(quote_remote_path "$partial_path")
+  quoted_archive=$(quote_remote_path "$archive_path")
+  # Noclobber odmítne i nepravděpodobnou kolizi jména místo přepsání dat.
+  write_command="umask 077; set -C; cat > ${quoted_partial}"
+  finish_command="test ! -e ${quoted_archive} && test ! -L ${quoted_archive} && mv ${quoted_partial} ${quoted_archive}"
+
+  # Kód je konstantní. Cesty, pravidla i SSH volby se předávají pouze přes argv.
+  # Přejmenování běží až po úspěšném taru i dokončeném přenosu přes SSH.
+  run_with_ac_monitor "$label" bash -c '
+    set +e
+    set -uo pipefail
+    source_dir=$1
+    target=$2
+    write_command=$3
+    finish_command=$4
+    ssh_option_count=$5
+    shift 5
+    ssh_options=("${@:1:ssh_option_count}")
+    shift "$ssh_option_count"
+    tar --create --gzip -C "$source_dir" "$@" |
+      ssh "${ssh_options[@]}" "$target" "$write_command"
+    transfer_status=("${PIPESTATUS[@]}")
+    if (( transfer_status[0] != 0 || transfer_status[1] != 0 )); then
+      printf "ERROR: Tar transfer failed (tar=%s, ssh=%s); archive remains .partial\n" \
+        "${transfer_status[0]}" "${transfer_status[1]}" >&2
+      exit 1
+    fi
+    if ssh "${ssh_options[@]}" "$target" "$finish_command"; then
+      exit 0
+    fi
+    printf "ERROR: Could not publish completed archive; archive remains .partial\n" >&2
+    exit 1
+  ' bash "$source_dir" "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}" \
+    "$write_command" "$finish_command" "${#SSH_OPTIONS[@]}" \
+    "${SSH_OPTIONS[@]}" "${TAR_METADATA_ARGS[@]}" "${TAR_ARGS[@]}"
 }
 
 log "================ Starting SafeData Full-Metadata Backup ================"
@@ -569,10 +749,6 @@ START_TIME=$(date +%s)
 # Main backup loop
 for VOL in "${VOLUMES[@]}"; do
   TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-  SNAP_NAME="snap_${VOL}_${TIMESTAMP}"
-  SNAP_DEV="/dev/${VG_NAME}/${SNAP_NAME}"
-  ORIG_DEV="/dev/${VG_NAME}/${VOL}"
-  MNT_DIR="/mnt/${SNAP_NAME}"
 
   log "Starting backup for ${VOL} (mode: ${RULES_MODE}, method: ${BACKUP_METHOD})"
 
@@ -589,13 +765,8 @@ for VOL in "${VOLUMES[@]}"; do
     if [ "${BACKUP_METHOD}" == "folder_tar" ]; then
       log "Starting tar backup for folder ${SRC_DIR}"
       
-      if [ "$RULES_MODE" == "include" ]; then
-        TAR_ARGS=$(build_tar_args "include" "${RULES_PATH}")
-      else
-        TAR_ARGS=$(build_tar_args "exclude" "${RULES_PATH}")
-      fi
-      
-      echo "TAR_ARGS: ${TAR_ARGS}"
+      build_tar_args "${RULES_MODE}" "${RULES_PATH}"
+      printf 'TAR_ARGS:'; printf ' %q' "${TAR_ARGS[@]}"; printf '\n'
       
       # Handle root directory specially
       DIR_NAME=$(basename "${SRC_DIR}")
@@ -603,7 +774,7 @@ for VOL in "${VOLUMES[@]}"; do
         DIR_NAME="root"
       fi
       
-      if run_shell_with_ac_monitor "tar backup for folder ${SRC_DIR}" "tar --create --gzip ${TAR_METADATA_ARGS} -C \"${SRC_DIR}\" ${TAR_ARGS} | ${SSH_COMMAND}\"${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}\" \"cat > ${REMOTE_BASE_DIR}/$(hostname)_${DIR_NAME}_${TIMESTAMP}.tar.gz\""; then
+      if run_tar_with_ac_monitor "tar backup for folder ${SRC_DIR}" "${SRC_DIR}" "${REMOTE_BASE_DIR}/$(hostname)_${DIR_NAME}_${TIMESTAMP}.tar.gz"; then
         log "Tar backup completed successfully for folder ${SRC_DIR}"
       else
         log "ERROR: Tar backup failed for folder ${SRC_DIR}"
@@ -635,31 +806,17 @@ for VOL in "${VOLUMES[@]}"; do
   # ============================================
   # LVM SNAPSHOT BACKUPS
   # ============================================
-  log "Creating snapshot for ${VOL}"
-  if ! lvcreate -L "${LVM_SNAP_SIZE}" -s -n "${SNAP_NAME}" "${ORIG_DEV}"; then
-    log "ERROR: Failed to create snapshot for ${VOL}"
-    exit 1
-  fi
-
-  log "Mounting snapshot ${SNAP_NAME}"
-  mkdir -p "${MNT_DIR}"
-  if ! mount "${SNAP_DEV}" "${MNT_DIR}"; then
-    log "ERROR: Failed to mount snapshot ${SNAP_NAME}"
+  if ! prepare_snapshot "${VOL}" "${TIMESTAMP}"; then
     exit 1
   fi
 
   if [ "${BACKUP_METHOD}" == "tar" ]; then
     log "Starting tar backup for ${VOL}"
     
-    if [ "$RULES_MODE" == "include" ]; then
-      TAR_ARGS=$(build_tar_args "include" "${RULES_PATH}")
-    else
-      TAR_ARGS=$(build_tar_args "exclude" "${RULES_PATH}")
-    fi
+    build_tar_args "${RULES_MODE}" "${RULES_PATH}"
+    printf 'TAR_ARGS:'; printf ' %q' "${TAR_ARGS[@]}"; printf '\n'
     
-    echo "TAR_ARGS: ${TAR_ARGS}"
-    
-    if run_shell_with_ac_monitor "tar backup for ${VOL}" "tar --create --gzip ${TAR_METADATA_ARGS} -C \"${MNT_DIR}\" ${TAR_ARGS} | ${SSH_COMMAND}\"${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}\" \"cat > ${REMOTE_BASE_DIR}/$(hostname)_${VOL}_${TIMESTAMP}.tar.gz\""; then
+    if run_tar_with_ac_monitor "tar backup for ${VOL}" "${MNT_DIR}" "${REMOTE_BASE_DIR}/$(hostname)_${VOL}_${TIMESTAMP}.tar.gz"; then
       log "Tar backup completed successfully for ${VOL}"
     else
       log "ERROR: Tar backup failed for ${VOL}"
@@ -696,12 +853,12 @@ for VOL in "${VOLUMES[@]}"; do
     fi
   fi
 
+  if ! cleanup; then
+    log "ERROR: Backup transfer for ${VOL} finished, but snapshot cleanup failed"
+    exit 1
+  fi
   log "Backup for ${VOL} completed successfully"
-  cleanup
 done
-
-# Disable traps since all cleanups are done
-trap - EXIT INT TERM
 
 # Calculate and display elapsed time
 END_TIME=$(date +%s)
