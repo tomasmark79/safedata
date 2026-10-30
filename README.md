@@ -6,6 +6,31 @@ Universal backup script for LVM volumes and regular directories. It supports
 `rsync` and `tar` backups with **include**, **exclude**, or **all** filtering
 rules while preserving extended filesystem metadata.
 
+## Is SafeData right for you?
+
+For a more comprehensive backup solution, consider [restic](https://restic.net/).
+It provides encrypted backups, efficient transfers of changed data, integrity
+checks, and support for a wide range of local and remote storage backends.
+
+**Choose SafeData when you want direct control over familiar backup tools:**
+
+- **Standard backup formats:** keep files in an rsync directory tree or a tar
+  archive and restore them with standard `rsync` or `tar` commands, without a
+  SafeData-specific repository format or restore tool. For rsync backups, use
+  the documented `--fake-super` restore options to recover privileged metadata.
+- **Built-in LVM snapshot workflow:** back up an LVM volume from a temporary
+  snapshot while continuing to use the original volume. Regular directories
+  are also supported through the `folder_*` methods. Applications that need
+  coordinated backups still require their own preparation.
+- **Filesystem metadata preservation:** retain ownership, permissions, ACLs,
+  extended attributes, hard links, and sparse files with the documented backup
+  and restore options.
+- **Explicit selection rules:** choose included paths, excluded paths, or the
+  whole filesystem using plain-text rules and transfer backups over SSH.
+
+SafeData fits Linux systems where transparent backup files and an explicit
+LVM/rsync/tar workflow matter more than an integrated backup repository.
+
 ## Concept
 
 **One script, three rule modes:**
