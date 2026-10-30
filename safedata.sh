@@ -79,6 +79,7 @@ SNAP_MOUNTED=0
 MNT_DIR_CREATED=0
 SNAP_LOCK_FD=""
 SNAP_LOCK_ROOT="/run/safedata/locks"
+SNAP_REMOVE_RETRIES_LEFT=30
 LIFECYCLE_CRITICAL=0
 PENDING_SIGNAL=""
 
@@ -397,6 +398,7 @@ prepare_snapshot() {
   # Krátký název nezávisí na délce LV; případnou kolizi lvcreate bezpečně odmítne.
   SNAP_NAME="safedata_${timestamp}_$$_${RANDOM}_${RANDOM}"
   SNAP_DEV="/dev/${VG_NAME}/${SNAP_NAME}"
+  SNAP_REMOVE_RETRIES_LEFT=30
   ORIG_DEV="/dev/${VG_NAME}/${volume}"
 
   LIFECYCLE_CRITICAL=1
@@ -442,6 +444,57 @@ prepare_snapshot() {
   fi
 }
 
+diagnose_snapshot_holders() {
+  local command output line device major minor proc dev target
+  # Diagnostika nesmí zakrýt původní chybu ani odpojovat cizí mounty.
+  for command in lvs dmsetup findmnt; do
+    case "${command}" in
+      lvs) output=$(lvs -o lv_name,origin,lv_attr,lv_size,data_percent "${SNAP_DEV}" 2>&1) || true ;;
+      dmsetup) output=$(dmsetup info -c "${SNAP_DEV}" 2>&1) || true ;;
+      findmnt) output=$(findmnt -rn -S "${SNAP_DEV}" -o TARGET,SOURCE,FSTYPE 2>&1) || true ;;
+    esac
+    while IFS= read -r line; do
+      log "Snapshot diagnostic (${command}): ${line}"
+    done <<< "${output}"
+  done
+
+  device=$(stat -Lc '%t:%T' "${SNAP_DEV}" 2>/dev/null) || return 0
+  major=${device%:*}
+  minor=${device#*:}
+  printf -v device '%d:%d' "$((16#${major}))" "$((16#${minor}))"
+  # Snapshot může být stále připojený v jiném mount namespace.
+  for proc in /proc/[0-9]*/mountinfo; do
+    [ -r "${proc}" ] || continue
+    while read -r _ _ dev _ target _; do
+      if [ "${dev}" = "${device}" ]; then
+        log "Snapshot holder: ${proc}, mount=${target}"
+        break
+      fi
+    done < "${proc}" 2>/dev/null || true
+  done
+}
+
+remove_owned_snapshot() {
+  local output
+  while :; do
+    if output=$(LC_ALL=C lvremove -y "${SNAP_DEV}" 2>&1); then
+      printf '%s\n' "${output}"
+      return 0
+    fi
+    printf '%s\n' "${output}" >&2
+    # umount může skončit dřív, než poslední držitel skutečně uvolní zařízení.
+    # Rozpočet je společný i pro následný EXIT trap; jiné chyby neopakujeme.
+    if [[ "${output}" != *"contains a filesystem in use"* ]] \
+      || [ "${SNAP_REMOVE_RETRIES_LEFT}" -eq 0 ]; then
+      diagnose_snapshot_holders
+      return 1
+    fi
+    SNAP_REMOVE_RETRIES_LEFT=$((SNAP_REMOVE_RETRIES_LEFT - 1))
+    log "Snapshot ${SNAP_NAME} is still in use; retrying removal in 1s (${SNAP_REMOVE_RETRIES_LEFT} retries left)"
+    sleep 1
+  done
+}
+
 cleanup_owned_resources() {
   # Při chybě zůstanou příznaky i zámek zachované pro další pokus a diagnostiku.
   # I neúspěšný mount helper mohl svazek připojit. Kontrolujeme jen adresář,
@@ -460,7 +513,7 @@ cleanup_owned_resources() {
 
   if [ "${SNAP_CREATED}" -eq 1 ]; then
     log "Removing snapshot ${SNAP_NAME}"
-    if ! lvremove -y "${SNAP_DEV}"; then
+    if ! remove_owned_snapshot; then
       log "ERROR: Failed to remove snapshot ${SNAP_NAME}; keeping lock"
       return 1
     fi

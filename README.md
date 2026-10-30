@@ -297,6 +297,13 @@ fails, the snapshot is retained and the run exits with an error. A completion
 message is issued only after successful cleanup. A snapshot or mount left
 behind after an error requires administrator inspection.
 
+If LVM reports `contains a filesystem in use` after unmounting, SafeData retries
+removal once per second, allowing at most 30 waits across cleanup and the exit
+handler together. Other removal errors fail immediately. On failure, the log
+includes LVM state, the device open count, and visible mount namespace holders.
+Diagnostic failures do not make cleanup successful. Later runs never delete
+old snapshots based only on their names.
+
 On `HUP`, `INT`, `TERM`, or unexpected exit, the transfer process group is
 stopped before snapshot cleanup begins. Cleanup cannot run after `SIGKILL` or
 a power failure.

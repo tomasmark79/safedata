@@ -29,6 +29,10 @@ mount() { printf 'mount:%s\n' "$*" >> "$TEST_ROOT/events"; return "$MOUNT_STATUS
 mountpoint() { return "$MOUNTPOINT_STATUS"; }
 umount() { printf 'unmount:%s\n' "$*" >> "$TEST_ROOT/events"; return "$UMOUNT_STATUS"; }
 lvremove() { printf 'remove:%s\n' "$*" >> "$TEST_ROOT/events"; return "$REMOVE_STATUS"; }
+lvs() { return 0; }
+dmsetup() { return 0; }
+findmnt() { return 1; }
+stat() { return 1; }
 mktemp() { command mktemp -d "$TEST_ROOT/mount.XXXXXXXXXX"; }
 is_on_ac_power() { return 0; }
 '''
@@ -153,6 +157,72 @@ REMOVE_STATUS=0
 cleanup
 ''')
         self.assertEqual(self.operations(), ["create", "mount", "unmount", "remove", "remove"])
+
+    def test_busy_removal_retries_after_delay_and_releases_owned_resources(self):
+        self.run_case('''
+prepare_snapshot lv_home now
+lvremove() {
+  printf 'remove:%s\n' "$*" >> "$TEST_ROOT/events"
+  # Počet volání musí přežít i spuštění příkazu v subshellu.
+  local count
+  count=$(grep -c '^remove:' "$TEST_ROOT/events")
+  if [ "$count" -lt 3 ]; then
+    printf 'Logical volume %s contains a filesystem in use.\n' "$SNAP_DEV" >&2
+    return 5
+  fi
+}
+sleep() { printf 'sleep:%s\n' "$*" >> "$TEST_ROOT/events"; }
+cleanup
+[ "$SNAP_CREATED:$SNAP_MOUNTED:$MNT_DIR_CREATED" = 0:0:0 ]
+[ -z "$SNAP_LOCK_FD" ]
+''')
+        self.assertEqual(self.operations(), ["create", "mount", "unmount", "remove", "sleep", "remove", "sleep", "remove"])
+        self.assertFalse(list(self.root.glob("mount.*")))
+
+    def test_busy_removal_has_shared_retry_limit_and_keeps_ownership(self):
+        self.run_case('''
+prepare_snapshot lv_home now
+lvremove() {
+  printf 'remove:%s\n' "$*" >> "$TEST_ROOT/events"
+  printf 'Logical volume %s contains a filesystem in use.\n' "$SNAP_DEV" >&2
+  return 5
+}
+sleep() { printf 'sleep:%s\n' "$*" >> "$TEST_ROOT/events"; }
+lvs() { printf 'diagnostic:logical-volume\n'; }
+dmsetup() { printf 'diagnostic:open-count\n'; }
+findmnt() { printf 'diagnostic:mounts\n'; return 1; }
+if cleanup; then exit 90; fi
+[ "$SNAP_CREATED:$SNAP_MOUNTED:$MNT_DIR_CREATED" = 1:0:1 ]
+[ -n "$SNAP_LOCK_FD" ]
+[ -d "$MNT_DIR" ]
+printf 'checkpoint\n' >> "$TEST_ROOT/events"
+if cleanup; then exit 91; fi
+trap - EXIT
+''')
+        before, after = "\n".join(self.events()).split("checkpoint", 1)
+        self.assertEqual(before.count("remove:-y"), 31)
+        self.assertEqual(before.count("sleep:1"), 30)
+        self.assertNotIn("sleep:", after)
+        self.assertIn("diagnostic:logical-volume", before)
+        self.assertIn("diagnostic:open-count", before)
+        self.assertIn("diagnostic:mounts", before)
+
+    def test_unrelated_removal_error_is_not_retried_or_reported_as_success(self):
+        result = self.run_case('''
+prepare_snapshot lv_home now
+lvremove() {
+  printf 'remove:%s\n' "$*" >> "$TEST_ROOT/events"
+  printf 'metadata write failed\n' >&2
+  return 5
+}
+sleep() { printf 'sleep:%s\n' "$*" >> "$TEST_ROOT/events"; }
+if cleanup; then exit 90; fi
+[ "$SNAP_CREATED" = 1 ]
+[ -n "$SNAP_LOCK_FD" ]
+trap - EXIT
+''')
+        self.assertEqual(self.operations(), ["create", "mount", "unmount", "remove"])
+        self.assertIn("metadata write failed", result.stderr)
 
     def test_failed_directory_creation_does_not_touch_lvm(self):
         self.run_case('''
