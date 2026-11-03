@@ -71,6 +71,7 @@
                     pkgs.gnused
                     pkgs.gnutar
                     pkgs.gzip
+                    pkgs.hostname
                     pkgs.lvm2
                     pkgs.openssh
                     pkgs.procps

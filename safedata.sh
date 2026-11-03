@@ -310,7 +310,7 @@ case "${BACKUP_METHOD}" in
 esac
 
 # Check required dependencies based on backup method
-BASE_DEPS=(ssh)
+BASE_DEPS=(ssh hostname)
 LVM_DEPS=(lvcreate lvremove vgs awk mount umount mountpoint flock)
 BASE_DEPS+=(setsid)
 
