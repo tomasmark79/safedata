@@ -24,6 +24,9 @@ MOUNT_STATUS=0
 UMOUNT_STATUS=0
 REMOVE_STATUS=0
 MOUNTPOINT_STATUS=1
+FREE_EXTENTS=20480
+EXTENT_BYTES=4194304
+VGS_STATUS=0
 log() { printf 'log:%s\n' "$1" >> "$TEST_ROOT/events"; }
 lvcreate() { printf 'create:%s\n' "$*" >> "$TEST_ROOT/events"; return "$CREATE_STATUS"; }
 mount() { printf 'mount:%s\n' "$*" >> "$TEST_ROOT/events"; return "$MOUNT_STATUS"; }
@@ -31,6 +34,7 @@ mountpoint() { return "$MOUNTPOINT_STATUS"; }
 umount() { printf 'unmount:%s\n' "$*" >> "$TEST_ROOT/events"; return "$UMOUNT_STATUS"; }
 lvremove() { printf 'remove:%s\n' "$*" >> "$TEST_ROOT/events"; return "$REMOVE_STATUS"; }
 lvs() { return 0; }
+vgs() { printf '%s:%s\n' "$FREE_EXTENTS" "$EXTENT_BYTES"; return "$VGS_STATUS"; }
 dmsetup() { return 0; }
 findmnt() { return 1; }
 stat() { return 1; }
@@ -102,6 +106,49 @@ cleanup
 ''')
         self.assertEqual(self.operations(), ["create"])
         self.assertFalse(list(self.root.glob("mount.*")))
+
+    def test_insufficient_space_creates_no_snapshot_or_mount_directory(self):
+        self.run_case('''
+FREE_EXTENTS=255
+if prepare_snapshot lv_home now; then exit 90; fi
+cleanup
+[ "$SNAP_CREATED:$MNT_DIR_CREATED" = 0:0 ]
+[ -z "$SNAP_LOCK_FD" ]
+''')
+        self.assertEqual(self.operations(), [])
+        self.assertIn("Insufficient free space", "\n".join(self.events()))
+        self.assertFalse(list(self.root.glob("mount.*")))
+
+    def test_exact_fit_and_lvm_size_units(self):
+        for size in ["1G", "1g", "1024", "1024m", "1048576K", "1073741824b", "2097152S", ".5G", "+1G"]:
+            with self.subTest(size=size):
+                (self.root / "events").unlink(missing_ok=True)
+                self.run_case(f'''
+FREE_EXTENTS=256
+LVM_SNAP_SIZE={size}
+prepare_snapshot lv_home now
+cleanup
+''')
+                self.assertEqual(self.operations(), ["create", "mount", "unmount", "remove"])
+
+    def test_required_size_rounds_up_to_whole_extents(self):
+        self.run_case('''
+FREE_EXTENTS=256
+LVM_SNAP_SIZE=1.000001G
+if prepare_snapshot lv_home now; then exit 90; fi
+cleanup
+''')
+        self.assertEqual(self.operations(), [])
+
+    def test_unreadable_or_invalid_capacity_fails_closed(self):
+        for setting in ["VGS_STATUS=5", "FREE_EXTENTS=broken", "EXTENT_BYTES=0", "LVM_SNAP_SIZE=invalid", "LVM_SNAP_SIZE=0G"]:
+            with self.subTest(setting=setting):
+                (self.root / "events").unlink(missing_ok=True)
+                self.run_case(setting + '''
+if prepare_snapshot lv_home now; then exit 90; fi
+cleanup
+''')
+                self.assertEqual(self.operations(), [])
 
     def test_failed_mount_removes_only_created_snapshot(self):
         self.run_case('''

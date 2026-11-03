@@ -311,7 +311,7 @@ esac
 
 # Check required dependencies based on backup method
 BASE_DEPS=(ssh)
-LVM_DEPS=(lvcreate lvremove mount umount mountpoint flock)
+LVM_DEPS=(lvcreate lvremove vgs awk mount umount mountpoint flock)
 BASE_DEPS+=(setsid)
 
 if [[ "${BACKUP_METHOD}" == "rsync" || "${BACKUP_METHOD}" == "rsync_notimestamp" || "${BACKUP_METHOD}" == "folder_rsync" ]]; then
@@ -365,6 +365,49 @@ finish_critical_section() {
   fi
 }
 
+check_snapshot_space() {
+  local capacity details status
+  if ! capacity=$(LC_ALL=C LVM_SUPPRESS_FD_WARNINGS=1 vgs --noheadings --units b --nosuffix \
+    --separator : -o vg_free_count,vg_extent_size "${VG_NAME}"); then
+    log "ERROR: Cannot read free space in volume group ${VG_NAME}; snapshot not created"
+    return 1
+  fi
+
+  # LVM input sizes use binary units (case insensitive), defaulting to MiB.
+  # Compare whole extents because lvcreate rounds the requested size up.
+  if details=$(LC_ALL=C awk -v size="${LVM_SNAP_SIZE}" -v capacity="${capacity}" '
+    BEGIN {
+      if (split(capacity, field, ":") != 2) exit 2
+      gsub(/[[:space:]]/, "", field[1]); gsub(/[[:space:]]/, "", field[2])
+      if (field[1] !~ /^[0-9]+$/ || field[2] !~ /^[0-9]+([.]0+)?$/ || field[2] + 0 <= 0) exit 2
+      free = field[1] + 0; extent = field[2] + 0
+      unit = toupper(substr(size, length(size), 1))
+      sub(/^[+]/, "", size)
+      multiplier["B"] = 1; multiplier["S"] = 512
+      multiplier["K"] = 1024; multiplier["M"] = 1024^2; multiplier["G"] = 1024^3
+      multiplier["T"] = 1024^4; multiplier["P"] = 1024^5; multiplier["E"] = 1024^6
+      if (unit ~ /^[0-9.]$/) { number = size; unit = "M" }
+      else { number = substr(size, 1, length(size) - 1) }
+      if (!(unit in multiplier) || number !~ /^([0-9]+([.][0-9]*)?|[.][0-9]+)$/ || number + 0 <= 0) exit 2
+      bytes = (number + 0) * multiplier[unit]
+      required = int(bytes / extent)
+      if (required * extent < bytes) required++
+      printf "requested %.0f extents (%.0f bytes), available %.0f extents (%.0f bytes)", required, required * extent, free, free * extent
+      exit (required > free ? 1 : 0)
+    }
+  '); then
+    return 0
+  else
+    status=$?
+    if [ "${status}" -eq 1 ]; then
+      log "ERROR: Insufficient free space in ${VG_NAME} for snapshot ${LVM_SNAP_SIZE}: ${details}; snapshot not created"
+    else
+      log "ERROR: Cannot validate snapshot size ${LVM_SNAP_SIZE} against volume group ${VG_NAME}; snapshot not created"
+    fi
+    return 1
+  fi
+}
+
 prepare_snapshot() {
   local volume="$1"
   local timestamp="$2"
@@ -400,6 +443,12 @@ prepare_snapshot() {
     log "ERROR: Another backup already owns ${VG_NAME}/${volume}"
     exec {SNAP_LOCK_FD}>&-
     SNAP_LOCK_FD=""
+    return 1
+  fi
+
+  # Capacity checks are advisory; lvcreate remains authoritative if another
+  # process allocates extents between this check and snapshot creation.
+  if ! check_snapshot_space; then
     return 1
   fi
 

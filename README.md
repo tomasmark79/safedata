@@ -293,12 +293,20 @@ configured target. The backup starts only if the probe confirms that remote
 
 ## How LVM Snapshot Works
 
-1. Script locks the selected VG/LV and creates a uniquely named LVM snapshot
+1. Script locks the selected VG/LV, checks free VG extents, and creates a uniquely named LVM snapshot
 2. Mounts snapshot to a private temporary directory under `/mnt/safedata.*`
 3. Backs up data from snapshot (consistent point-in-time)
 4. Unmounts and removes snapshot
 
 **Advantage:** System can run normally while snapshot captures the state at a specific moment.
+
+Before creating the mount directory or snapshot, SafeData checks that the VG
+has enough free extents for `SAFEDATA_LVM_SNAP_SIZE`, rounded up to the VG extent
+size. Sizes use the same binary units as LVM (case insensitive; MiB when no unit
+is given). Insufficient space or an unreadable capacity report stops the run
+with an error in the normal log; no snapshot is created or automatically deleted.
+Other processes can still allocate space after this check, so `lvcreate` remains
+the final authority and its failure is handled by the usual owned-resource cleanup.
 
 ## Safe Completion and Verification
 
@@ -309,8 +317,9 @@ message is issued only after successful cleanup. A snapshot or mount left
 behind after an error requires administrator inspection.
 
 If LVM reports `contains a filesystem in use` after unmounting, SafeData retries
-removal once per second, allowing at most 30 waits across cleanup and the exit
-handler together. Other removal errors fail immediately. On failure, the log
+removal once per second within `SAFEDATA_SNAPSHOT_CLEANUP_TIMEOUT` (300 seconds
+by default), sharing the monotonic deadline with the exit handler and counting
+time spent in LVM commands. Other removal errors fail immediately. On failure, the log
 includes LVM state, the device open count, and visible mount namespace holders.
 Diagnostic failures do not make cleanup successful. Later runs never delete
 old snapshots based only on their names.
