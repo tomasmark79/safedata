@@ -10,10 +10,10 @@
 #   ./show_stats.sh 6         - Show summary statistics
 #
 # Environment variables:
-#   SAFEDATA_LOG_FILE - Cesta k activity.log; statistiky použijí jeho adresář.
-#   LOGS_DIR     - Volitelné přepsání adresáře s logy.
-#                  Výchozí adresář: ~/.local/share/logs/safedata
-#   STATS_FILE   - CSV se statistikami (výchozí: $LOGS_DIR/stats.csv)
+#   SAFEDATA_LOG_FILE - Path to activity.log; statistics use its directory.
+#   LOGS_DIR     - Optional override for the log directory.
+#                  Default directory: ~/.local/share/logs/safedata
+#   STATS_FILE   - Statistics CSV file (default: $LOGS_DIR/stats.csv)
 #   UCHART       - Path to uchart.py (default: same directory as this script)
 #
 # Credits:

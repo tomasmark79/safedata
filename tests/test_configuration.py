@@ -1,4 +1,4 @@
-"""Neplatný rozpočet musí skončit ještě před vytvořením logů či zálohy."""
+"""An invalid time budget must fail before creating logs or backups."""
 
 import os
 from pathlib import Path

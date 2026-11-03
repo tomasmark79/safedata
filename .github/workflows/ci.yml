@@ -1,4 +1,4 @@
-name: Kontrola SafeData
+name: SafeData checks
 on: [push, pull_request, workflow_dispatch]
 permissions:
   contents: read
@@ -8,8 +8,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v31
-      # Testy nikdy nepoužívají skutečné LVM, SSH spojení ani zálohovaná data.
-      - name: Sestavení a bezpečné regrese
+      # Tests never use real LVM, SSH connections, or backup data.
+      - name: Build and safe regression tests
         run: nix flake check --no-update-lock-file --option allow-import-from-derivation false --print-build-logs
-      - name: Nezměněný zámek závislostí
+      - name: Verify dependency lock file is unchanged
         run: git diff --exit-code -- flake.lock

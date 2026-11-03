@@ -8,7 +8,7 @@
 # CONFIGURATION
 # ============================================
 SNAPSHOT_CLEANUP_TIMEOUT="${SAFEDATA_SNAPSHOT_CLEANUP_TIMEOUT-300}"
-# Omezíme i délku před aritmetikou, aby přetečení nemohlo obejít validaci.
+# Limit the length before arithmetic so overflow cannot bypass validation.
 if [[ ! "${SNAPSHOT_CLEANUP_TIMEOUT}" =~ ^[0-9]{1,5}$ ]] \
   || (( 10#${SNAPSHOT_CLEANUP_TIMEOUT} < 1 || 10#${SNAPSHOT_CLEANUP_TIMEOUT} > 86400 )); then
   echo "ERROR: SAFEDATA_SNAPSHOT_CLEANUP_TIMEOUT must be an integer from 1 to 86400 seconds" >&2
@@ -77,7 +77,7 @@ RSYNC_METADATA_ARGS=(
 # preserve sparse files efficiently.
 TAR_METADATA_ARGS=(--numeric-owner --acls --xattrs '--xattrs-include=*' --selinux --sparse)
 
-# Stav patří pouze tomuto běhu; cizí snapshot se podle existence nemaže.
+# State belongs only to this run; an existing snapshot is not removed unless owned.
 MNT_DIR=""
 SNAP_NAME=""
 SNAP_DEV=""
@@ -169,7 +169,7 @@ check_ssh_connection() {
   exit 1
 }
 
-# NAS může používat POSIX sh; Bashové printf %q není pro něj obecně přenositelné.
+# The NAS may use POSIX sh; Bash printf %q is not generally portable to it.
 quote_remote_path() {
   local value="$1"
   value="${value//\'/\'\"\'\"\'}"
@@ -181,7 +181,7 @@ check_remote_target() {
   local quoted_remote_dir
   quoted_remote_dir=$(quote_remote_path "${REMOTE_BASE_DIR}")
 
-  # Cesta je citována pro POSIX shell vzdáleného NASu.
+  # Quote the path for the remote NAS's POSIX shell.
   # shellcheck disable=SC2029
   if ! ssh "${SSH_OPTIONS[@]}" \
        "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}" \
@@ -222,7 +222,7 @@ check_remote_fake_super_support() {
     chmod 600 "${probe_dir}/probe"
     rm -f "${probe_dir}/probe"
     rmdir "${probe_dir}"
-    # Cesta je citována pro POSIX shell vzdáleného NASu.
+    # Quote the path for the remote NAS's POSIX shell.
     # shellcheck disable=SC2029
     ssh "${SSH_OPTIONS[@]}" "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}" \
       "rm -f ${quoted_remote_probe}/probe; rmdir ${quoted_remote_probe}" 2>/dev/null || true
@@ -234,7 +234,7 @@ check_remote_fake_super_support() {
   chmod 600 "${probe_dir}/probe"
   rm -f "${probe_dir}/probe"
   rmdir "${probe_dir}"
-  # Cesta je citována pro POSIX shell vzdáleného NASu.
+  # Quote the path for the remote NAS's POSIX shell.
   # shellcheck disable=SC2029
   ssh "${SSH_OPTIONS[@]}" "${REMOTE_SSH_USER}@${REMOTE_SSH_HOST}" \
     "rm -f ${quoted_remote_probe}/probe && rmdir ${quoted_remote_probe}"
@@ -370,7 +370,7 @@ prepare_snapshot() {
   local timestamp="$2"
   local status
 
-  # Názvy VG/LV nesmějí změnit cestu k zámku.
+  # VG/LV names must not alter the lock path.
   if [[ ! "${VG_NAME}" =~ ^[a-zA-Z0-9_+.][a-zA-Z0-9_+.-]*$ ]] \
     || [[ ! "${volume}" =~ ^[a-zA-Z0-9_+.][a-zA-Z0-9_+.-]*$ ]] \
     || [[ "${VG_NAME}" == "." || "${VG_NAME}" == ".." || "${volume}" == "." || "${volume}" == ".." ]]; then
@@ -403,7 +403,7 @@ prepare_snapshot() {
     return 1
   fi
 
-  # Krátký název nezávisí na délce LV; případnou kolizi lvcreate bezpečně odmítne.
+  # The short name is independent of LV length; lvcreate safely rejects collisions.
   SNAP_NAME="safedata_${timestamp}_$$_${RANDOM}_${RANDOM}"
   SNAP_DEV="/dev/${VG_NAME}/${SNAP_NAME}"
   SNAP_CLEANUP_DEADLINE=""
@@ -422,8 +422,8 @@ prepare_snapshot() {
   fi
 
   log "Creating snapshot for ${volume}"
-  # Signál se zpracuje až po zaznamenání výsledku, aby mezi lvcreate a evidencí
-  # vlastnictví nevzniklo okno, v němž by dokončený snapshot zůstal bez úklidu.
+  # Handle signals only after recording the result so a snapshot created by
+  # lvcreate cannot be left without cleanup before its ownership is recorded.
   LIFECYCLE_CRITICAL=1
   if lvcreate -L "${LVM_SNAP_SIZE}" -s -n "${SNAP_NAME}" "${ORIG_DEV}"; then
     SNAP_CREATED=1
@@ -454,7 +454,7 @@ prepare_snapshot() {
 
 diagnose_snapshot_holders() {
   local command output line device major minor proc dev target
-  # Diagnostika nesmí zakrýt původní chybu ani odpojovat cizí mounty.
+  # Diagnostics must not mask the original error or unmount unrelated mounts.
   for command in lvs dmsetup findmnt; do
     case "${command}" in
       lvs) output=$(lvs -o lv_name,origin,lv_attr,lv_size,data_percent "${SNAP_DEV}" 2>&1) || true ;;
@@ -470,7 +470,7 @@ diagnose_snapshot_holders() {
   major=${device%:*}
   minor=${device#*:}
   printf -v device '%d:%d' "$((16#${major}))" "$((16#${minor}))"
-  # Snapshot může být stále připojený v jiném mount namespace.
+  # The snapshot may still be mounted in another mount namespace.
   for proc in /proc/[0-9]*/mountinfo; do
     [ -r "${proc}" ] || continue
     while read -r _ _ dev _ target _; do
@@ -484,7 +484,7 @@ diagnose_snapshot_holders() {
 
 snapshot_cleanup_now() {
   local uptime unused
-  # Monotónní čas zahrnuje i uspání a nezávisí na změně systémového data.
+  # Monotonic time includes suspend time and is unaffected by system clock changes.
   read -r uptime unused < /proc/uptime
   printf '%s\n' "${uptime%%.*}"
 }
@@ -506,7 +506,7 @@ remove_owned_snapshot() {
       return 0
     fi
     printf '%s\n' "${output}" >&2
-    # Deadline je společný i pro EXIT trap a zahrnuje čas příkazů LVM.
+    # The deadline is shared with the EXIT trap and includes LVM command runtime.
     now=$(snapshot_cleanup_now) || return 1
     if [[ "${output}" != *"contains a filesystem in use"* ]] \
       || [ "${now}" -ge "${SNAP_CLEANUP_DEADLINE}" ]; then
@@ -519,9 +519,9 @@ remove_owned_snapshot() {
 }
 
 cleanup_owned_resources() {
-  # Při chybě zůstanou příznaky i zámek zachované pro další pokus a diagnostiku.
-  # I neúspěšný mount helper mohl svazek připojit. Kontrolujeme jen adresář,
-  # který tento běh sám vytvořil a dosud vlastní.
+  # On failure, preserve flags and the lock for another attempt and diagnostics.
+  # Even a failed mount helper may have mounted the volume. Check only the
+  # directory created and still owned by this run.
   if [ "${MNT_DIR_CREATED}" -eq 1 ] && mountpoint -q "${MNT_DIR}"; then
     SNAP_MOUNTED=1
   fi
@@ -577,8 +577,8 @@ terminate_backup() {
     return 0
   fi
 
-  # Skupinu ukončíme i tehdy, když její vedoucí proces už skončil, ale jeho
-  # potomci stále čtou snapshot nebo přenášejí data.
+  # Terminate the group even if its leader has exited but its descendants
+  # are still reading the snapshot or transferring data.
   local attempt
   kill -TERM -- "-${BACKUP_PID}" 2>/dev/null || true
   for attempt in {1..20}; do
@@ -731,7 +731,7 @@ build_rsync_args() {
   fi
 }
 
-# Pravidla jsou jednotlivé argumenty; jejich obsah nikdy nevyhodnocuje shell.
+# Rules are separate arguments; their contents are never evaluated by the shell.
 TAR_ARGS=()
 build_tar_args() {
   local mode="$1"
@@ -749,7 +749,7 @@ build_tar_args() {
       [[ -z "$line" ]] && continue
       
       if [[ "$line" =~ ^/ ]]; then
-        # Úvodní lomítko ukotví vzor ke kořeni archivu, jinak platí všude.
+        # A leading slash anchors the pattern to the archive root; otherwise it applies anywhere.
         TAR_ARGS+=("--exclude=./${line#/}")
       else
         TAR_ARGS+=("--exclude=${line}")
@@ -776,18 +776,18 @@ build_tar_args() {
 run_tar_with_ac_monitor() {
   local label="$1"
   local source_dir="$2"
-  # Unikátní jméno chrání i hotové archivy dvou záloh spuštěných v téže sekundě.
+  # A unique name also protects completed archives from backups started in the same second.
   local archive_path="${3%.tar.gz}_${BASHPID}_${RANDOM}_${RANDOM}_${RANDOM}_${RANDOM}.tar.gz"
   local partial_path="${archive_path}.partial"
   local quoted_partial quoted_archive write_command finish_command
   quoted_partial=$(quote_remote_path "$partial_path")
   quoted_archive=$(quote_remote_path "$archive_path")
-  # Noclobber odmítne i nepravděpodobnou kolizi jména místo přepsání dat.
+  # Noclobber rejects even an unlikely name collision instead of overwriting data.
   write_command="umask 077; set -C; cat > ${quoted_partial}"
   finish_command="test ! -e ${quoted_archive} && test ! -L ${quoted_archive} && mv ${quoted_partial} ${quoted_archive}"
 
-  # Kód je konstantní. Cesty, pravidla i SSH volby se předávají pouze přes argv.
-  # Přejmenování běží až po úspěšném taru i dokončeném přenosu přes SSH.
+  # The code is constant. Paths, rules, and SSH options are passed only through argv.
+  # Rename only after tar succeeds and the SSH transfer completes.
   run_with_ac_monitor "$label" bash -c '
     set +e
     set -uo pipefail

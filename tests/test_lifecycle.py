@@ -1,4 +1,4 @@
-"""Životní cyklus skutečných funkcí s falešným LVM a vlastními pomocnými procesy."""
+"""Lifecycle of real functions with stub LVM commands and custom helper processes."""
 
 import os
 from pathlib import Path
@@ -11,7 +11,7 @@ import unittest
 
 SOURCE = Path(__file__).resolve().parents[1] / "safedata.sh"
 TEXT = SOURCE.read_text()
-STATE = TEXT[TEXT.index('# Stav patří pouze tomuto běhu;'):TEXT.index('check_dependencies() {')]
+STATE = TEXT[TEXT.index('# State belongs only to this run;'):TEXT.index('check_dependencies() {')]
 FUNCTIONS = TEXT[TEXT.index('finish_critical_section() {'):TEXT.index('# Detect mode based on filename pattern')]
 MOCKS = r'''
 SNAPSHOT_CLEANUP_TIMEOUT=300
@@ -79,9 +79,9 @@ class LifecycleTests(unittest.TestCase):
             if path.exists() and path.read_text().strip():
                 return path.read_text().strip()
             if process.poll() is not None:
-                self.fail(f"Pomocný proces skončil předčasně: {process.communicate()}")
+                self.fail(f"Helper process exited prematurely: {process.communicate()}")
             time.sleep(0.02)
-        self.fail(f"Pomocný proces nevytvořil {path.name}")
+        self.fail(f"Helper process did not create {path.name}")
 
     def start_case(self, body, name="case.sh"):
         process = subprocess.Popen(
@@ -164,7 +164,7 @@ cleanup
 prepare_snapshot lv_home now
 lvremove() {
   printf 'remove:%s\n' "$*" >> "$TEST_ROOT/events"
-  # Počet volání musí přežít i spuštění příkazu v subshellu.
+  # The call count must persist even when the command runs in a subshell.
   local count
   count=$(grep -c '^remove:' "$TEST_ROOT/events")
   if [ "$count" -lt 128 ]; then

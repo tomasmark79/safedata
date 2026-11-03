@@ -32,7 +32,7 @@
 
             nativeBuildInputs = [ pkgs.makeWrapper ];
 
-            # Regrese používají jen dočasná data a náhrady LVM a SSH příkazů.
+            # Regression tests use only temporary data and stub LVM and SSH commands.
             nativeCheckInputs = with pkgs; [
               python3
               bash

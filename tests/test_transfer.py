@@ -1,4 +1,4 @@
-"""Přenosy do dočasného cíle bez SSH, LVM a uživatelských souborů."""
+"""Transfers to a temporary destination without SSH, LVM, or user files."""
 
 import json
 import os
