@@ -14,6 +14,7 @@ TEXT = SOURCE.read_text()
 STATE = TEXT[TEXT.index('# Stav patří pouze tomuto běhu;'):TEXT.index('check_dependencies() {')]
 FUNCTIONS = TEXT[TEXT.index('finish_critical_section() {'):TEXT.index('# Detect mode based on filename pattern')]
 MOCKS = r'''
+SNAPSHOT_CLEANUP_TIMEOUT=300
 VG_NAME=vg_test
 LVM_SNAP_SIZE=1G
 AC_CHECK_INTERVAL=0.05
@@ -166,17 +167,18 @@ lvremove() {
   # Počet volání musí přežít i spuštění příkazu v subshellu.
   local count
   count=$(grep -c '^remove:' "$TEST_ROOT/events")
-  if [ "$count" -lt 3 ]; then
+  if [ "$count" -lt 128 ]; then
     printf 'Logical volume %s contains a filesystem in use.\n' "$SNAP_DEV" >&2
     return 5
   fi
 }
+snapshot_cleanup_now() { grep -c '^sleep:' "$TEST_ROOT/events" || true; }
 sleep() { printf 'sleep:%s\n' "$*" >> "$TEST_ROOT/events"; }
 cleanup
 [ "$SNAP_CREATED:$SNAP_MOUNTED:$MNT_DIR_CREATED" = 0:0:0 ]
 [ -z "$SNAP_LOCK_FD" ]
 ''')
-        self.assertEqual(self.operations(), ["create", "mount", "unmount", "remove", "sleep", "remove", "sleep", "remove"])
+        self.assertEqual(self.operations(), ["create", "mount", "unmount"] + ["remove", "sleep"] * 127 + ["remove"])
         self.assertFalse(list(self.root.glob("mount.*")))
 
     def test_busy_removal_has_shared_retry_limit_and_keeps_ownership(self):
@@ -187,6 +189,7 @@ lvremove() {
   printf 'Logical volume %s contains a filesystem in use.\n' "$SNAP_DEV" >&2
   return 5
 }
+snapshot_cleanup_now() { grep -c '^sleep:' "$TEST_ROOT/events" || true; }
 sleep() { printf 'sleep:%s\n' "$*" >> "$TEST_ROOT/events"; }
 lvs() { printf 'diagnostic:logical-volume\n'; }
 dmsetup() { printf 'diagnostic:open-count\n'; }
@@ -200,12 +203,32 @@ if cleanup; then exit 91; fi
 trap - EXIT
 ''')
         before, after = "\n".join(self.events()).split("checkpoint", 1)
-        self.assertEqual(before.count("remove:-y"), 31)
-        self.assertEqual(before.count("sleep:1"), 30)
+        self.assertEqual(before.count("remove:-y"), 300)
+        self.assertEqual(before.count("sleep:1"), 300)
+        self.assertNotIn("remove:", after)
         self.assertNotIn("sleep:", after)
         self.assertIn("diagnostic:logical-volume", before)
         self.assertIn("diagnostic:open-count", before)
         self.assertIn("diagnostic:mounts", before)
+
+    def test_time_spent_in_lvm_consumes_shared_cleanup_deadline(self):
+        self.run_case('''
+SNAPSHOT_CLEANUP_TIMEOUT=5
+printf '0\n' > "$TEST_ROOT/clock"
+snapshot_cleanup_now() { cat "$TEST_ROOT/clock"; }
+prepare_snapshot lv_home now
+lvremove() {
+  printf 'remove:%s\n' "$*" >> "$TEST_ROOT/events"
+  printf '6\n' > "$TEST_ROOT/clock"
+  printf 'Logical volume contains a filesystem in use.\n' >&2
+  return 5
+}
+sleep() { printf 'sleep:%s\n' "$*" >> "$TEST_ROOT/events"; }
+if cleanup; then exit 90; fi
+if cleanup; then exit 91; fi
+trap - EXIT
+''')
+        self.assertEqual(self.operations(), ["create", "mount", "unmount", "remove"])
 
     def test_unrelated_removal_error_is_not_retried_or_reported_as_success(self):
         result = self.run_case('''

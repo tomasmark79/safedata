@@ -7,6 +7,14 @@
 # ============================================
 # CONFIGURATION
 # ============================================
+SNAPSHOT_CLEANUP_TIMEOUT="${SAFEDATA_SNAPSHOT_CLEANUP_TIMEOUT-300}"
+# Omezíme i délku před aritmetikou, aby přetečení nemohlo obejít validaci.
+if [[ ! "${SNAPSHOT_CLEANUP_TIMEOUT}" =~ ^[0-9]{1,5}$ ]] \
+  || (( 10#${SNAPSHOT_CLEANUP_TIMEOUT} < 1 || 10#${SNAPSHOT_CLEANUP_TIMEOUT} > 86400 )); then
+  echo "ERROR: SAFEDATA_SNAPSHOT_CLEANUP_TIMEOUT must be an integer from 1 to 86400 seconds" >&2
+  exit 1
+fi
+SNAPSHOT_CLEANUP_TIMEOUT=$((10#${SNAPSHOT_CLEANUP_TIMEOUT}))
 VG_NAME="${SAFEDATA_VG_NAME:-vg_main}"
 LVM_SNAP_SIZE="${SAFEDATA_LVM_SNAP_SIZE:-80G}"
 LOG_FILE="${SAFEDATA_LOG_FILE:-${HOME}/.local/share/logs/safedata/activity.log}"
@@ -36,7 +44,7 @@ fi
 # Ensure the script is run as root
 if [ "$EUID" -ne 0 ]; then
   echo "This script must be run as root. Re-running with sudo..."
-  exec sudo --preserve-env=SAFEDATA_VG_NAME,SAFEDATA_LVM_SNAP_SIZE,SAFEDATA_LOG_FILE,SAFEDATA_SSH_KEY_PATH,SAFEDATA_SSH_KNOWN_HOSTS_PATH,SAFEDATA_SSH_PORT,SAFEDATA_REMOTE_SSH_USER,SAFEDATA_REMOTE_SSH_HOST,SAFEDATA_REMOTE_BASE_DIR,SAFEDATA_SSH_CONNECT_TIMEOUT,SAFEDATA_SSH_RETRY_COUNT,SAFEDATA_SSH_RETRY_DELAY,SAFEDATA_AC_CHECK_INTERVAL bash "$0" "$@"
+  exec sudo --preserve-env=SAFEDATA_VG_NAME,SAFEDATA_LVM_SNAP_SIZE,SAFEDATA_LOG_FILE,SAFEDATA_SSH_KEY_PATH,SAFEDATA_SSH_KNOWN_HOSTS_PATH,SAFEDATA_SSH_PORT,SAFEDATA_REMOTE_SSH_USER,SAFEDATA_REMOTE_SSH_HOST,SAFEDATA_REMOTE_BASE_DIR,SAFEDATA_SSH_CONNECT_TIMEOUT,SAFEDATA_SSH_RETRY_COUNT,SAFEDATA_SSH_RETRY_DELAY,SAFEDATA_AC_CHECK_INTERVAL,SAFEDATA_SNAPSHOT_CLEANUP_TIMEOUT bash "$0" "$@"
 fi
 
 # Get the directory of the script
@@ -79,7 +87,7 @@ SNAP_MOUNTED=0
 MNT_DIR_CREATED=0
 SNAP_LOCK_FD=""
 SNAP_LOCK_ROOT="/run/safedata/locks"
-SNAP_REMOVE_RETRIES_LEFT=30
+SNAP_CLEANUP_DEADLINE=""
 LIFECYCLE_CRITICAL=0
 PENDING_SIGNAL=""
 
@@ -398,7 +406,7 @@ prepare_snapshot() {
   # Krátký název nezávisí na délce LV; případnou kolizi lvcreate bezpečně odmítne.
   SNAP_NAME="safedata_${timestamp}_$$_${RANDOM}_${RANDOM}"
   SNAP_DEV="/dev/${VG_NAME}/${SNAP_NAME}"
-  SNAP_REMOVE_RETRIES_LEFT=30
+  SNAP_CLEANUP_DEADLINE=""
   ORIG_DEV="/dev/${VG_NAME}/${volume}"
 
   LIFECYCLE_CRITICAL=1
@@ -474,23 +482,38 @@ diagnose_snapshot_holders() {
   done
 }
 
+snapshot_cleanup_now() {
+  local uptime unused
+  # Monotónní čas zahrnuje i uspání a nezávisí na změně systémového data.
+  read -r uptime unused < /proc/uptime
+  printf '%s\n' "${uptime%%.*}"
+}
+
 remove_owned_snapshot() {
-  local output
+  local output now
+  now=$(snapshot_cleanup_now) || return 1
+  if [ -z "${SNAP_CLEANUP_DEADLINE}" ]; then
+    SNAP_CLEANUP_DEADLINE=$((now + SNAPSHOT_CLEANUP_TIMEOUT))
+  fi
   while :; do
+    now=$(snapshot_cleanup_now) || return 1
+    if [ "${now}" -ge "${SNAP_CLEANUP_DEADLINE}" ]; then
+      diagnose_snapshot_holders
+      return 1
+    fi
     if output=$(LC_ALL=C lvremove -y "${SNAP_DEV}" 2>&1); then
       printf '%s\n' "${output}"
       return 0
     fi
     printf '%s\n' "${output}" >&2
-    # umount může skončit dřív, než poslední držitel skutečně uvolní zařízení.
-    # Rozpočet je společný i pro následný EXIT trap; jiné chyby neopakujeme.
+    # Deadline je společný i pro EXIT trap a zahrnuje čas příkazů LVM.
+    now=$(snapshot_cleanup_now) || return 1
     if [[ "${output}" != *"contains a filesystem in use"* ]] \
-      || [ "${SNAP_REMOVE_RETRIES_LEFT}" -eq 0 ]; then
+      || [ "${now}" -ge "${SNAP_CLEANUP_DEADLINE}" ]; then
       diagnose_snapshot_holders
       return 1
     fi
-    SNAP_REMOVE_RETRIES_LEFT=$((SNAP_REMOVE_RETRIES_LEFT - 1))
-    log "Snapshot ${SNAP_NAME} is still in use; retrying removal in 1s (${SNAP_REMOVE_RETRIES_LEFT} retries left)"
+    log "Snapshot ${SNAP_NAME} is still in use; retrying removal in 1s ($((SNAP_CLEANUP_DEADLINE - now))s left)"
     sleep 1
   done
 }

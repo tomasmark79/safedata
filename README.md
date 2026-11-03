@@ -256,6 +256,8 @@ export SAFEDATA_SSH_KNOWN_HOSTS_PATH="/path/to/known_hosts"
 export SAFEDATA_REMOTE_SSH_USER="backup-user"
 export SAFEDATA_REMOTE_SSH_HOST="backup.example.com"
 export SAFEDATA_REMOTE_BASE_DIR="/remote/backup/safedata"
+# Optional: wait for a busy snapshot device to be released after unmounting.
+export SAFEDATA_SNAPSHOT_CLEANUP_TIMEOUT=300
 
 # Optional defaults:
 export SAFEDATA_VG_NAME="vg_main"
@@ -271,6 +273,15 @@ export SAFEDATA_AC_CHECK_INTERVAL="10"
 Required variables are `SAFEDATA_SSH_KEY_PATH`,
 `SAFEDATA_SSH_KNOWN_HOSTS_PATH`, `SAFEDATA_REMOTE_SSH_USER`,
 `SAFEDATA_REMOTE_SSH_HOST`, and `SAFEDATA_REMOTE_BASE_DIR`.
+
+`SAFEDATA_SNAPSHOT_CLEANUP_TIMEOUT` accepts an integer from 1 to 86400 seconds
+and defaults to 300. Empty or invalid values are rejected before creating logs
+or starting a backup. Only the LVM error `contains a filesystem in use` is
+retried. A monotonic deadline includes time spent in failed LVM commands and
+is shared with subsequent exit cleanup. An already running LVM command is not
+interrupted by this deadline; allow additional time in the service stop timeout
+(for example, 360 seconds for the default budget). A persistent failure keeps
+the snapshot and reports diagnostics instead of deleting other mounts.
 
 The directory specified by `SAFEDATA_REMOTE_BASE_DIR` must already exist on the
 remote server. The SSH user must be able to write files and user extended
